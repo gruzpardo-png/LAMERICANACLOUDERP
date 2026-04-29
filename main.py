@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
 APP_NAME = "LA ERP Cloud"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FAMILIES = ["vestuario", "hogar", "zapatillas", "bolsos"]
 TERMINALS = ["T1", "T2", "T3", "T4"]
 
@@ -124,8 +125,8 @@ class Label(Base):
 
 
 app = FastAPI(title=APP_NAME)
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
 
 def get_db():

@@ -1,29 +1,10 @@
-{% extends "base.html" %}
-{% block content %}
-<h1>Tablas de precios</h1>
-<section class="cards">
-  {% for family, count in counts.items() %}
-  <div class="card"><span>{{ family|capitalize }}</span><strong>{{ count }}</strong></div>
-  {% endfor %}
-</section>
-<section class="panel">
-  <h2>Importar Excel</h2>
-  <p class="muted">El archivo debe tener hojas llamadas vestuario, hogar, zapatillas y bolsos. Columnas esperadas: código, descripción, precio bruto.</p>
-  <form method="post" action="/precios/importar" enctype="multipart/form-data" class="form-inline">
-    <input type="file" name="file" accept=".xlsx,.xlsm" required>
-    <label class="check"><input type="checkbox" name="replace_all" value="1"> Reemplazar precios actuales</label>
-    <button class="primary" type="submit">Importar</button>
-  </form>
-</section>
-<section class="panel">
-  <h2>Muestra de precios</h2>
-  <table>
-    <thead><tr><th>Familia</th><th>Código</th><th>Descripción</th><th>Precio</th></tr></thead>
-    <tbody>
-    {% for p in sample %}
-      <tr><td>{{ p.family }}</td><td>{{ p.product_code }}</td><td>{{ p.description }}</td><td>{{ format_clp(p.price_gross) }}</td></tr>
-    {% else %}<tr><td colspan="4" class="muted">Sin precios cargados.</td></tr>{% endfor %}
-    </tbody>
-  </table>
-</section>
-{% endblock %}
+@echo off
+set ERP_URL=https://lamericana-erp-cloud.onrender.com
+set AGENT_TOKEN=CAMBIAR_TOKEN
+set TERMINAL=T1
+set COM_PORT=COM3
+set BAUDRATE=9600
+set PRINT_MODE=dry_run
+set PRINTER_KEYWORD=XPRINTER
+python local_agent.py
+pause

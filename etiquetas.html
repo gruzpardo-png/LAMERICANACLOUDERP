@@ -1,23 +1,35 @@
-{% extends "base.html" %}
-{% block content %}
-<div class="login-card">
-  <h1>Ingreso LA ERP Cloud</h1>
-  <p class="muted">Módulo de producción y etiquetas para La Americana.</p>
-  {% if error %}<div class="alert">{{ error }}</div>{% endif %}
-  <form method="post" action="/login" class="form-grid single">
-    <label>Usuario
-      <input name="username" autocomplete="username" required autofocus>
-    </label>
-    <label>Clave
-      <input name="password" type="password" autocomplete="current-password" required>
-    </label>
-    <label>Terminal
-      <select name="terminal">
-        {% for t in terminals %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
-      </select>
-    </label>
-    <button class="primary" type="submit">Entrar</button>
-  </form>
-  <p class="hint">Usuario inicial: gustavo · clave inicial: 1176. Cámbiala cuando dejemos el módulo de usuarios completo.</p>
-</div>
-{% endblock %}
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title or 'LA ERP Cloud' }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <strong>LA ERP Cloud</strong>
+      <span class="muted">Producción y Etiquetado</span>
+    </div>
+    {% if user %}
+    <nav>
+      <a href="/dashboard">Dashboard</a>
+      <a href="/etiquetas">Etiquetas</a>
+      <a href="/historial">Historial</a>
+      <a href="/lotes">Lotes</a>
+      {% if user.can_manage_users %}<a href="/precios">Precios</a>{% endif %}
+      <a href="/logout">Salir</a>
+    </nav>
+    {% endif %}
+  </header>
+  {% if user %}
+  <section class="sessionbar">
+    Usuario: <b>{{ user.code }}</b> {{ user.full_name }} · Terminal: <b>{{ terminal or request.session.get('terminal') }}</b>
+  </section>
+  {% endif %}
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

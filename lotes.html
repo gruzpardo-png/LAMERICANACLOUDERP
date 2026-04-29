@@ -1,17 +1,84 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="row-between">
-  <h1>Historial de etiquetas</h1>
-  <a class="button" href="/export/labels.csv">Exportar CSV</a>
-</div>
+<h1>Etiquetado</h1>
+<section class="grid-2">
+  <div class="panel">
+    <h2>Nueva etiqueta</h2>
+    <div class="weight-box">
+      <span>Peso actual {{ terminal }}</span>
+      <strong>{% if weight %}{{ '%.3f'|format(weight.weight_kg) }} kg{% else %}-- kg{% endif %}</strong>
+      {% if weight %}<small>Actualizado: {{ weight.updated_at.strftime('%d-%m-%Y %H:%M:%S') }} · {{ weight.source }}</small>{% endif %}
+    </div>
+    <form method="post" action="/etiquetas/calcular" class="form-grid">
+      <label>Familia
+        <select name="family" required>
+          {% for f in families %}<option value="{{ f }}">{{ f|capitalize }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Método
+        <select name="method" id="method" onchange="toggleMethod()">
+          <option value="kilo">Por kilo</option>
+          <option value="objetivo">Precio objetivo</option>
+        </select>
+      </label>
+      <label>Fuente de peso
+        <select name="weight_source" id="weight_source" onchange="toggleWeight()">
+          <option value="agent">Agente / balanza</option>
+          <option value="manual">Manual</option>
+        </select>
+      </label>
+      <label id="manual_weight_wrap" class="hidden">Peso manual kg
+        <input name="manual_weight_kg" placeholder="0.352">
+      </label>
+      <label id="value_kilo_wrap">Valor kilo
+        <input name="value_per_kg" placeholder="12000">
+      </label>
+      <label id="target_price_wrap" class="hidden">Precio objetivo
+        <input name="target_price" placeholder="4990">
+      </label>
+      <label>IN / procedencia
+        <input name="in_origin" placeholder="Fardo mujer premium / proveedor / lote">
+      </label>
+      <label>Lote
+        <select name="lot_id">
+          <option value="">Sin lote</option>
+          {% for lot in lots %}<option value="{{ lot.id }}">#{{ lot.id }} · {{ lot.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" name="print_requested" value="1"> Imprimir con agente local</label>
+      <button class="primary" type="submit">Calcular / Guardar</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h2>Resultado</h2>
+    {% if label %}
+    <div class="label-preview">
+      <div class="price">{{ format_clp(label.final_price) }}</div>
+      <div class="barcode">||||| || ||||| ||| || |||||</div>
+      <div><b>Cod:</b> {{ label.product_code }}</div>
+      <div><b>Peso:</b> {{ '%.3f'|format(label.weight_kg) }} kg</div>
+      <div><b>IDX:</b> {{ '%.2f'|format(label.idx_value or 0) }} {{ label.user_code }} {{ label.terminal }}</div>
+      <div><b>IN:</b> {{ label.in_origin or '--' }}</div>
+      <div><b>DS:</b> {{ label.description }}</div>
+      <div><b>Estado:</b> {{ label.print_status }}</div>
+    </div>
+    {% else %}
+    <p class="muted">Calcula una etiqueta para ver el resultado.</p>
+    {% endif %}
+  </div>
+</section>
+
 <section class="panel">
+  <h2>Últimas etiquetas</h2>
   <table>
-    <thead><tr><th>ID</th><th>Fecha</th><th>Usuario</th><th>Terminal</th><th>Familia</th><th>Método</th><th>Peso</th><th>Precio</th><th>Código</th><th>Descripción</th><th>Estado</th></tr></thead>
+    <thead><tr><th>Hora</th><th>Usuario</th><th>Familia</th><th>Peso</th><th>Precio</th><th>Código</th><th>Estado</th></tr></thead>
     <tbody>
-    {% for l in labels %}
-      <tr><td>{{ l.id }}</td><td>{{ l.created_at.strftime('%d-%m-%Y %H:%M:%S') }}</td><td>{{ l.user_code }}</td><td>{{ l.terminal }}</td><td>{{ l.family }}</td><td>{{ l.method }}</td><td>{{ '%.3f'|format(l.weight_kg) }}</td><td>{{ format_clp(l.final_price) }}</td><td>{{ l.product_code }}</td><td>{{ l.description }}</td><td>{{ l.print_status }}</td></tr>
-    {% else %}<tr><td colspan="11" class="muted">Sin etiquetas.</td></tr>{% endfor %}
+    {% for l in latest %}
+      <tr><td>{{ l.created_at.strftime('%H:%M:%S') }}</td><td>{{ l.user_code }}</td><td>{{ l.family }}</td><td>{{ '%.3f'|format(l.weight_kg) }}</td><td>{{ format_clp(l.final_price) }}</td><td>{{ l.product_code }}</td><td>{{ l.print_status }}</td></tr>
+    {% else %}<tr><td colspan="7" class="muted">Sin etiquetas.</td></tr>{% endfor %}
     </tbody>
   </table>
 </section>
+<script src="/static/app.js"></script>
 {% endblock %}
