@@ -1,24 +1,35 @@
-function toggleMethod() {
-  const method = document.getElementById('method')?.value;
-  const kilo = document.getElementById('value_kilo_wrap');
-  const target = document.getElementById('target_price_wrap');
-  if (!kilo || !target) return;
-  if (method === 'objetivo') {
-    kilo.classList.add('hidden');
-    target.classList.remove('hidden');
-  } else {
-    kilo.classList.remove('hidden');
-    target.classList.add('hidden');
-  }
-}
-function toggleWeight() {
-  const source = document.getElementById('weight_source')?.value;
-  const manual = document.getElementById('manual_weight_wrap');
-  if (!manual) return;
-  if (source === 'manual') manual.classList.remove('hidden');
-  else manual.classList.add('hidden');
-}
-document.addEventListener('DOMContentLoaded', () => {
-  toggleMethod();
-  toggleWeight();
-});
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title or 'LA ERP Cloud' }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <strong>LA ERP Cloud</strong>
+      <span class="muted">Producción y Etiquetado</span>
+    </div>
+    {% if user %}
+    <nav>
+      <a href="/dashboard">Dashboard</a>
+      <a href="/etiquetas">Etiquetas</a>
+      <a href="/historial">Historial</a>
+      <a href="/lotes">Lotes</a>
+      {% if user.can_manage_users %}<a href="/precios">Precios</a>{% endif %}
+      <a href="/logout">Salir</a>
+    </nav>
+    {% endif %}
+  </header>
+  {% if user %}
+  <section class="sessionbar">
+    Usuario: <b>{{ user.code }}</b> {{ user.full_name }} · Terminal: <b>{{ terminal or request.session.get('terminal') }}</b>
+  </section>
+  {% endif %}
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

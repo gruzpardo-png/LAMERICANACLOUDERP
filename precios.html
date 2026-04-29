@@ -1,48 +1,16 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Dashboard diario</h1>
-<div class="cards">
-  <div class="card"><span>Etiquetas hoy</span><strong>{{ total_labels }}</strong></div>
-  <div class="card"><span>Kilos procesados</span><strong>{{ '%.3f'|format(total_kg) }} kg</strong></div>
-  <div class="card"><span>Valor venta proyectado</span><strong>{{ format_clp(total_value) }}</strong></div>
+<div class="row-between">
+  <h1>Historial de etiquetas</h1>
+  <a class="button" href="/export/labels.csv">Exportar CSV</a>
 </div>
-
-<section class="grid-2">
-  <div class="panel">
-    <h2>Producción por usuario</h2>
-    <table>
-      <thead><tr><th>Usuario</th><th>Etiquetas</th><th>Kg</th><th>Valor</th></tr></thead>
-      <tbody>
-      {% for code, row in by_user.items() %}
-        <tr><td>{{ code }}</td><td>{{ row.labels }}</td><td>{{ '%.3f'|format(row.kg) }}</td><td>{{ format_clp(row.value) }}</td></tr>
-      {% else %}<tr><td colspan="4" class="muted">Sin producción hoy.</td></tr>{% endfor %}
-      </tbody>
-    </table>
-  </div>
-  <div class="panel">
-    <h2>Producción por familia</h2>
-    <table>
-      <thead><tr><th>Familia</th><th>Etiquetas</th><th>Kg</th><th>Valor</th></tr></thead>
-      <tbody>
-      {% for family, row in by_family.items() %}
-        <tr><td>{{ family }}</td><td>{{ row.labels }}</td><td>{{ '%.3f'|format(row.kg) }}</td><td>{{ format_clp(row.value) }}</td></tr>
-      {% else %}<tr><td colspan="4" class="muted">Sin familias procesadas.</td></tr>{% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
-
 <section class="panel">
-  <div class="row-between">
-    <h2>Últimas etiquetas</h2>
-    <a class="button" href="/etiquetas">Nueva etiqueta</a>
-  </div>
   <table>
-    <thead><tr><th>Hora</th><th>Usuario</th><th>Terminal</th><th>Familia</th><th>Peso</th><th>Precio</th><th>Código</th><th>Estado</th></tr></thead>
+    <thead><tr><th>ID</th><th>Fecha</th><th>Usuario</th><th>Terminal</th><th>Familia</th><th>Método</th><th>Peso</th><th>Precio</th><th>Código</th><th>Descripción</th><th>Estado</th></tr></thead>
     <tbody>
-    {% for l in latest %}
-      <tr><td>{{ l.created_at.strftime('%H:%M:%S') }}</td><td>{{ l.user_code }}</td><td>{{ l.terminal }}</td><td>{{ l.family }}</td><td>{{ '%.3f'|format(l.weight_kg) }}</td><td>{{ format_clp(l.final_price) }}</td><td>{{ l.product_code }}</td><td>{{ l.print_status }}</td></tr>
-    {% else %}<tr><td colspan="8" class="muted">Aún no hay etiquetas.</td></tr>{% endfor %}
+    {% for l in labels %}
+      <tr><td>{{ l.id }}</td><td>{{ l.created_at.strftime('%d-%m-%Y %H:%M:%S') }}</td><td>{{ l.user_code }}</td><td>{{ l.terminal }}</td><td>{{ l.family }}</td><td>{{ l.method }}</td><td>{{ '%.3f'|format(l.weight_kg) }}</td><td>{{ format_clp(l.final_price) }}</td><td>{{ l.product_code }}</td><td>{{ l.description }}</td><td>{{ l.print_status }}</td></tr>
+    {% else %}<tr><td colspan="11" class="muted">Sin etiquetas.</td></tr>{% endfor %}
     </tbody>
   </table>
 </section>
