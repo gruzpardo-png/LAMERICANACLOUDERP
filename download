@@ -1,0 +1,321 @@
+"""
+Agente local Windows para LA ERP Cloud.
+
+Funciones:
+- Lee una balanza por puerto COM.
+- Envía el peso estable al ERP en Render.
+- Consulta órdenes de impresión pendientes para su terminal.
+- Imprime etiqueta 60x40 en Xprinter o guarda PNG si PRINT_MODE=dry_run.
+
+Variables de entorno principales:
+ERP_URL=https://tu-servicio.onrender.com
+AGENT_TOKEN=el-mismo-token-configurado-en-render
+TERMINAL=T1
+COM_PORT=COM3
+BAUDRATE=9600
+PRINT_MODE=dry_run  # dry_run o windows
+PRINTER_KEYWORD=XPRINTER
+"""
+import io
+import os
+import re
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+import requests
+import serial
+from barcode import Code39
+from barcode.writer import ImageWriter
+from PIL import Image, ImageDraw, ImageFont, ImageWin
+
+try:
+    import win32con
+    import win32gui
+    import win32print
+    import win32ui
+except Exception:
+    win32con = win32gui = win32print = win32ui = None
+
+ERP_URL = os.getenv("ERP_URL", "http://127.0.0.1:8000").rstrip("/")
+AGENT_TOKEN = os.getenv("AGENT_TOKEN", "dev-agent-token-cambiar")
+TERMINAL = os.getenv("TERMINAL", "T1").upper()
+COM_PORT = os.getenv("COM_PORT", "COM3")
+BAUDRATE = int(os.getenv("BAUDRATE", "9600"))
+PRINT_MODE = os.getenv("PRINT_MODE", "dry_run").lower()
+PRINTER_KEYWORD = os.getenv("PRINTER_KEYWORD", "XPRINTER").upper()
+POLL_SECONDS = float(os.getenv("POLL_SECONDS", "2"))
+OUT_DIR = Path(os.getenv("OUT_DIR", "labels_out"))
+OUT_DIR.mkdir(exist_ok=True)
+
+
+def normalizar_linea_balanza(datos):
+    if isinstance(datos, bytes):
+        datos = datos.decode("utf-8", errors="ignore")
+    datos = datos.replace("\x02", "").replace("\x03", "").replace("M", "").strip()
+    datos = re.sub(r"\s+", " ", datos)
+    return datos
+
+
+def extraer_peso_desde_linea(datos) -> Optional[float]:
+    datos = normalizar_linea_balanza(datos)
+    if not datos:
+        return None
+    match = re.search(r"[-+]?\d*\.\d+|\d+", datos)
+    if not match:
+        return None
+    try:
+        valor = float(match.group())
+    except Exception:
+        return None
+    # Compatible con balanzas que envían gramos enteros.
+    if abs(valor) >= 10:
+        return valor / 1000.0
+    return valor
+
+
+def enviar_peso(weight_kg: float):
+    response = requests.post(
+        f"{ERP_URL}/api/agent/weight",
+        data={
+            "token": AGENT_TOKEN,
+            "terminal": TERMINAL,
+            "weight_kg": f"{weight_kg:.3f}",
+            "source": f"agent:{COM_PORT}",
+        },
+        timeout=10,
+    )
+    response.raise_for_status()
+
+
+def leer_balanza_loop():
+    print(f"Conectando balanza {COM_PORT} baud {BAUDRATE}...")
+    ser = serial.Serial(port=COM_PORT, baudrate=BAUDRATE, timeout=1)
+    try:
+        ser.reset_input_buffer()
+    except Exception:
+        pass
+    peso_anterior = None
+    contador = 0
+    enviado = None
+    while True:
+        try:
+            if ser.in_waiting:
+                raw = ser.read(ser.in_waiting)
+                texto = raw.decode("utf-8", errors="ignore")
+                lineas = texto.splitlines() or ([texto] if texto.strip() else [])
+                for linea in lineas:
+                    peso = extraer_peso_desde_linea(linea)
+                    if peso is None:
+                        continue
+                    token = f"{peso:.3f}"
+                    if token == peso_anterior:
+                        contador += 1
+                    else:
+                        contador = 1
+                        peso_anterior = token
+                    if contador >= 5 and token != enviado:
+                        enviar_peso(peso)
+                        enviado = token
+                        print(f"Peso enviado {TERMINAL}: {token} kg")
+            time.sleep(0.03)
+        except Exception as exc:
+            print(f"Error lectura/envío de balanza: {exc}")
+            time.sleep(2)
+
+
+def format_clp(value) -> str:
+    return f"${int(round(float(value))):,}".replace(",", ".")
+
+
+def try_font(names, size):
+    for name in names:
+        try:
+            return ImageFont.truetype(name, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def best_fit(draw, text, names, max_w, max_h, start=70, end=10):
+    best = try_font(names, end)
+    for size in range(start, end - 1, -1):
+        font = try_font(names, size)
+        box = draw.textbbox((0, 0), text, font=font)
+        if box[2] - box[0] <= max_w and box[3] - box[1] <= max_h:
+            return font
+    return best
+
+
+def truncate(draw, text, font, max_w):
+    text = str(text or "").strip()
+    if draw.textbbox((0, 0), text, font=font)[2] <= max_w:
+        return text
+    ellipsis = "..."
+    while text:
+        candidate = text + ellipsis
+        if draw.textbbox((0, 0), candidate, font=font)[2] <= max_w:
+            return candidate
+        text = text[:-1].rstrip()
+    return ellipsis
+
+
+def barcode_image(code: str):
+    code = str(code).strip().upper().replace(" ", "-")
+    code = re.sub(r"[^0-9A-Z\-\. \$/\+%]", "-", code)
+    obj = Code39(code, writer=ImageWriter(), add_checksum=False)
+    buffer = io.BytesIO()
+    obj.write(buffer, {
+        "write_text": False,
+        "dpi": 203,
+        "module_width": 0.33,
+        "module_height": 11.0,
+        "quiet_zone": 6.0,
+    })
+    buffer.seek(0)
+    img = Image.open(buffer).convert("L")
+    return img.point(lambda p: 0 if p < 128 else 255, mode="1")
+
+
+def generar_etiqueta_60x40(job: dict) -> Image.Image:
+    dpi = 203
+    w_px = int((60 / 25.4) * dpi)
+    h_px = int((40 / 25.4) * dpi)
+    image = Image.new("RGB", (w_px, h_px), "white")
+    draw = ImageDraw.Draw(image)
+    margin_x = 8
+    margin_y = 6
+    top_price_h = 84
+    barcode_h = 86
+    footer_h = 118
+
+    price_text = format_clp(job["final_price"])
+    price_font = best_fit(draw, price_text, ["arialbd.ttf", "arial.ttf"], w_px - 2 * margin_x, top_price_h - 4, start=78, end=18)
+    info_font = try_font(["arialbd.ttf", "arial.ttf"], 16)
+    small_font = try_font(["arial.ttf", "arialbd.ttf"], 13)
+    tiny_font = try_font(["arial.ttf", "arialbd.ttf"], 11)
+
+    box = draw.textbbox((0, 0), price_text, font=price_font)
+    draw.text(((w_px - (box[2]-box[0])) // 2, margin_y + (top_price_h - (box[3]-box[1])) // 2), price_text, fill="black", font=price_font)
+
+    b = barcode_image(job["product_code"])
+    bw, bh = b.size
+    avail_w = w_px - 2 * margin_x
+    scale = min(avail_w / bw, barcode_h / bh)
+    bc = b.resize((max(1, int(bw * scale)), max(1, int(bh * scale))), Image.NEAREST)
+    barcode_y0 = margin_y + top_price_h + 2
+    image.paste(bc.convert("RGB"), ((w_px - bc.width) // 2, barcode_y0 + (barcode_h - bc.height) // 2))
+
+    footer_y = h_px - footer_h
+    right_x = w_px // 2
+    created = datetime.fromisoformat(job["created_at"]).strftime("%Y-%m-%d %H:%M:%S") if job.get("created_at") else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    fecha, hora = created.split(" ")
+    idx = float(job.get("idx_value") or 0)
+    draw.text((margin_x, footer_y), f"Cod: {job['product_code']}", fill="black", font=info_font)
+    draw.text((margin_x, footer_y + 20), f"Peso: {float(job['weight_kg']):.3f} kg", fill="black", font=info_font)
+    draw.text((right_x, footer_y + 20), f"Fecha: {fecha}", fill="black", font=info_font)
+    draw.text((margin_x, footer_y + 40), f"IDX: {idx:.2f}  {job.get('user_code', '--')} {job.get('terminal', TERMINAL)}", fill="black", font=small_font)
+    draw.text((right_x, footer_y + 40), f"Hora: {hora}", fill="black", font=small_font)
+    in_line = truncate(draw, f"IN: {job.get('in_origin') or '--'}", small_font, w_px - 2 * margin_x)
+    desc_line = truncate(draw, f"DS: {job.get('description') or '--'}", small_font, w_px - 2 * margin_x)
+    draw.text((margin_x, footer_y + 60), in_line, fill="black", font=small_font)
+    draw.text((margin_x, footer_y + 76), desc_line, fill="black", font=small_font)
+    draw.text((margin_x, h_px - 14), job.get("method", "--").upper(), fill="black", font=tiny_font)
+    return image
+
+
+def buscar_xprinter():
+    if not win32print:
+        return None
+    printers = win32print.EnumPrinters(win32print.PRINTER_ENUM_CONNECTIONS | win32print.PRINTER_ENUM_LOCAL)
+    matches = [p[2] for p in printers if PRINTER_KEYWORD in p[2].upper()]
+    return matches[0] if matches else None
+
+
+def imprimir_windows(image: Image.Image):
+    if not all([win32print, win32ui, win32con, win32gui]):
+        raise RuntimeError("pywin32 no disponible. Usa Windows e instala pywin32 o deja PRINT_MODE=dry_run.")
+    printer_name = buscar_xprinter()
+    if not printer_name:
+        raise RuntimeError(f"No se encontró impresora con palabra {PRINTER_KEYWORD}")
+    h_printer = win32print.OpenPrinter(printer_name)
+    try:
+        props = win32print.GetPrinter(h_printer, 2)
+        devmode = props["pDevMode"]
+        devmode.FormName = "Etiqueta60x40"
+        devmode.PaperSize = 256
+        devmode.PaperWidth = 600
+        devmode.PaperLength = 400
+        devmode.Orientation = win32con.DMORIENT_PORTRAIT
+        devmode.Fields |= win32con.DM_FORMNAME | win32con.DM_PAPERSIZE | win32con.DM_PAPERWIDTH | win32con.DM_PAPERLENGTH | win32con.DM_ORIENTATION
+        hdc_handle = win32gui.CreateDC("WINSPOOL", printer_name, None)
+        win32gui.ResetDC(hdc_handle, devmode)
+        hdc = win32ui.CreateDCFromHandle(hdc_handle)
+        hdc.StartDoc("LA ERP Cloud Etiqueta")
+        hdc.StartPage()
+        dib = ImageWin.Dib(image.convert("RGB"))
+        dib.draw(hdc.GetHandleOutput(), (0, 0, image.width, image.height))
+        hdc.EndPage()
+        hdc.EndDoc()
+        hdc.DeleteDC()
+    finally:
+        win32print.ClosePrinter(h_printer)
+
+
+def marcar_impresa(label_id: int, ok: bool, error: str = ""):
+    response = requests.post(
+        f"{ERP_URL}/api/agent/print-jobs/{label_id}/done",
+        data={"token": AGENT_TOKEN, "ok": str(ok).lower(), "error": error},
+        timeout=10,
+    )
+    response.raise_for_status()
+
+
+def reencolar(label_id: int):
+    try:
+        requests.post(f"{ERP_URL}/api/agent/print-jobs/{label_id}/requeue", data={"token": AGENT_TOKEN}, timeout=10)
+    except Exception:
+        pass
+
+
+def imprimir_job(job: dict):
+    image = generar_etiqueta_60x40(job)
+    if PRINT_MODE == "windows":
+        imprimir_windows(image)
+        print(f"Etiqueta impresa #{job['id']}")
+    else:
+        path = OUT_DIR / f"etiqueta_{job['id']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        image.save(path)
+        print(f"DRY RUN: etiqueta guardada {path}")
+
+
+def print_loop():
+    print(f"Consultando trabajos de impresión para {TERMINAL} en {ERP_URL}...")
+    while True:
+        try:
+            response = requests.get(f"{ERP_URL}/api/agent/print-jobs", params={"token": AGENT_TOKEN, "terminal": TERMINAL}, timeout=15)
+            response.raise_for_status()
+            for job in response.json().get("jobs", []):
+                try:
+                    imprimir_job(job)
+                    marcar_impresa(job["id"], True)
+                except Exception as exc:
+                    print(f"Error imprimiendo #{job.get('id')}: {exc}")
+                    marcar_impresa(job["id"], False, str(exc))
+                    reencolar(job["id"])
+            time.sleep(POLL_SECONDS)
+        except Exception as exc:
+            print(f"Error consultando trabajos: {exc}")
+            time.sleep(5)
+
+
+if __name__ == "__main__":
+    import threading
+    print("LA ERP Cloud - Agente local")
+    print(f"ERP_URL={ERP_URL} TERMINAL={TERMINAL} COM_PORT={COM_PORT} PRINT_MODE={PRINT_MODE}")
+    threading.Thread(target=print_loop, daemon=True).start()
+    try:
+        leer_balanza_loop()
+    except KeyboardInterrupt:
+        print("Agente detenido.")

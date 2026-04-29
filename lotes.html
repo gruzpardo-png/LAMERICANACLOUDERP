@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row-between">
+  <h1>Historial de etiquetas</h1>
+  <a class="button" href="/export/labels.csv">Exportar CSV</a>
+</div>
+<section class="panel">
+  <table>
+    <thead><tr><th>ID</th><th>Fecha</th><th>Usuario</th><th>Terminal</th><th>Familia</th><th>Método</th><th>Peso</th><th>Precio</th><th>Código</th><th>Descripción</th><th>Estado</th></tr></thead>
+    <tbody>
+    {% for l in labels %}
+      <tr><td>{{ l.id }}</td><td>{{ l.created_at.strftime('%d-%m-%Y %H:%M:%S') }}</td><td>{{ l.user_code }}</td><td>{{ l.terminal }}</td><td>{{ l.family }}</td><td>{{ l.method }}</td><td>{{ '%.3f'|format(l.weight_kg) }}</td><td>{{ format_clp(l.final_price) }}</td><td>{{ l.product_code }}</td><td>{{ l.description }}</td><td>{{ l.print_status }}</td></tr>
+    {% else %}<tr><td colspan="11" class="muted">Sin etiquetas.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

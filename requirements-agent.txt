@@ -1,0 +1,59 @@
+:root {
+  --bg: #f5f7fb;
+  --panel: #ffffff;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --brand: #8b1d3d;
+  --brand-dark: #5f1028;
+  --line: #e5e7eb;
+  --ok: #0f766e;
+  --warn: #b45309;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: var(--text); background: var(--bg); }
+a { color: var(--brand); text-decoration: none; font-weight: 700; }
+.topbar { display: flex; justify-content: space-between; align-items: center; padding: 14px 22px; background: #111827; color: white; position: sticky; top: 0; z-index: 10; }
+.topbar nav { display: flex; gap: 16px; flex-wrap: wrap; }
+.topbar a { color: white; opacity: .92; }
+.topbar a:hover { opacity: 1; text-decoration: underline; }
+.sessionbar { background: #fff7ed; border-bottom: 1px solid #fed7aa; padding: 8px 22px; font-size: 14px; }
+.container { width: min(1280px, calc(100% - 32px)); margin: 22px auto 60px; }
+h1 { margin: 0 0 16px; font-size: 30px; }
+h2 { margin: 0 0 14px; font-size: 20px; }
+.muted { color: var(--muted); }
+.hint { color: var(--muted); font-size: 13px; margin-top: 16px; }
+.alert { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; padding: 10px; border-radius: 10px; margin: 12px 0; }
+.login-card { width: min(460px, 100%); margin: 60px auto; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 28px; box-shadow: 0 10px 30px rgba(0,0,0,.06); }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-bottom: 18px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; box-shadow: 0 6px 18px rgba(0,0,0,.04); }
+.card span { display: block; color: var(--muted); margin-bottom: 8px; }
+.card strong { font-size: 30px; color: var(--brand); }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; margin-bottom: 18px; box-shadow: 0 6px 18px rgba(0,0,0,.04); overflow-x: auto; }
+.row-between { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+.button, button, .primary { border: 0; border-radius: 10px; padding: 10px 14px; cursor: pointer; font-weight: 800; background: #e5e7eb; color: #111827; }
+.primary { background: var(--brand); color: white; }
+.primary:hover { background: var(--brand-dark); }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { border-bottom: 1px solid var(--line); padding: 10px 8px; text-align: left; vertical-align: top; }
+th { background: #f9fafb; color: #374151; font-size: 13px; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 14px; }
+.form-grid.single { grid-template-columns: 1fr; }
+.form-inline { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+label { display: grid; gap: 6px; font-weight: 700; color: #374151; }
+input, select { width: 100%; border: 1px solid #d1d5db; border-radius: 10px; padding: 11px 12px; font-size: 15px; background: white; }
+.check { display: flex; flex-direction: row; align-items: center; gap: 8px; font-weight: 700; }
+.check input { width: auto; }
+.hidden { display: none; }
+.weight-box { background: #ecfeff; border: 1px solid #a5f3fc; border-radius: 16px; padding: 16px; margin-bottom: 14px; }
+.weight-box span { display: block; color: var(--muted); }
+.weight-box strong { display: block; font-size: 38px; color: var(--ok); margin: 6px 0; }
+.weight-box small { color: var(--muted); }
+.label-preview { width: 360px; max-width: 100%; background: white; border: 2px dashed #111827; border-radius: 8px; padding: 12px; font-family: Arial, Helvetica, sans-serif; }
+.label-preview .price { font-size: 48px; font-weight: 900; text-align: center; margin-bottom: 8px; }
+.label-preview .barcode { letter-spacing: 4px; font-size: 26px; text-align: center; border-top: 1px solid #111827; border-bottom: 1px solid #111827; margin: 8px 0; padding: 6px 0; overflow: hidden; white-space: nowrap; }
+@media (max-width: 860px) {
+  .topbar { align-items: flex-start; gap: 10px; flex-direction: column; }
+  .grid-2, .form-grid { grid-template-columns: 1fr; }
+  .card strong { font-size: 24px; }
+}

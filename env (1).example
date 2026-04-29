@@ -1,0 +1,10 @@
+@echo off
+set ERP_URL=https://lamericana-erp-cloud.onrender.com
+set AGENT_TOKEN=CAMBIAR_TOKEN
+set TERMINAL=T1
+set COM_PORT=COM3
+set BAUDRATE=9600
+set PRINT_MODE=dry_run
+set PRINTER_KEYWORD=XPRINTER
+python local_agent.py
+pause
