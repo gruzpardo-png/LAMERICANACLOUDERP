@@ -7,11 +7,12 @@ import secrets
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Request, Form, Depends, HTTPException
+from fastapi import FastAPI, Request, Form, Depends, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse
 from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, ForeignKey, func
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from starlette.middleware.sessions import SessionMiddleware
+from openpyxl import load_workbook
 
 APP_NAME = "LA ERP Cloud"
 FAMILIES = ["vestuario", "hogar", "zapatillas", "bolsos"]
@@ -96,6 +97,19 @@ class Label(Base):
     in_origin = Column(String(255))
     print_status = Column(String(30), default="no_solicitada")
     user = relationship("User", back_populates="labels")
+
+
+class PriceImport(Base):
+    __tablename__ = "price_imports"
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, default=now, index=True)
+    username = Column(String(50), nullable=False)
+    file_name = Column(String(255), nullable=False)
+    total_rows = Column(Integer, default=0)
+    inserted_rows = Column(Integer, default=0)
+    skipped_rows = Column(Integer, default=0)
+    status = Column(String(30), default="ok")
+    detail = Column(String(2000), default="")
 
 
 def db_session():
@@ -204,6 +218,124 @@ def find_product(db, family, amount, upwards=False):
         return product or q.order_by(PriceItem.price_gross.desc()).first()
     items = q.all()
     return min(items, key=lambda p: abs(p.price_gross - amount)) if items else None
+
+
+def normalize_family(name):
+    s = str(name or "").strip().lower()
+    aliases = {
+        "vestuario": "vestuario",
+        "ropa": "vestuario",
+        "hogar": "hogar",
+        "casa": "hogar",
+        "zapatillas": "zapatillas",
+        "zapatos": "zapatillas",
+        "calzado": "zapatillas",
+        "bolsos": "bolsos",
+        "bolso": "bolsos",
+        "carteras": "bolsos",
+    }
+    return aliases.get(s)
+
+
+def clean_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def normalize_product_code(value):
+    text = clean_text(value)
+    if text.endswith(".0") and text.replace(".0", "").isdigit():
+        text = text[:-2]
+    return text
+
+
+def detect_price_columns(sample_rows):
+    headers = [clean_text(v).lower() for v in sample_rows[0]] if sample_rows else []
+    idx_code = idx_desc = idx_price = None
+    for i, h in enumerate(headers):
+        compact = h.replace(" ", "").replace("_", "")
+        if idx_code is None and ("codigo" in compact or "código" in compact or compact in ("cod", "sku")):
+            idx_code = i
+        if idx_desc is None and ("descripcion" in compact or "descripción" in compact or compact in ("desc", "producto", "nombre")):
+            idx_desc = i
+        if idx_price is None and ("precio" in compact or "valor" in compact or "venta" in compact):
+            idx_price = i
+    if idx_code is not None and idx_desc is not None and idx_price is not None:
+        return idx_code, idx_desc, idx_price, 2
+    return 0, 1, 2, 1
+
+
+def parse_prices_excel(file_bytes):
+    wb = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+    imported = []
+    skipped = []
+    sheet_summary = {}
+    found_families = set()
+
+    for ws in wb.worksheets:
+        family = normalize_family(ws.title)
+        if not family:
+            continue
+
+        found_families.add(family)
+        first_rows = []
+        for i, row in enumerate(ws.iter_rows(values_only=True), start=1):
+            first_rows.append(row)
+            if i >= 5:
+                break
+
+        idx_code, idx_desc, idx_price, start_row = detect_price_columns(first_rows)
+        inserted_sheet = 0
+        skipped_sheet = 0
+
+        for row_number, row in enumerate(ws.iter_rows(values_only=True), start=1):
+            if row_number < start_row:
+                continue
+            max_idx = max(idx_code, idx_desc, idx_price)
+            if len(row) <= max_idx:
+                skipped_sheet += 1
+                continue
+
+            code = normalize_product_code(row[idx_code])
+            description = clean_text(row[idx_desc])
+            price = to_float(row[idx_price])
+
+            if not code and not description and price is None:
+                continue
+
+            if not code or not description or price is None or price <= 0:
+                skipped_sheet += 1
+                if len(skipped) < 30:
+                    skipped.append(f"{ws.title} fila {row_number}: código/descripción/precio inválido")
+                continue
+
+            imported.append({
+                "family": family,
+                "product_code": code[:80],
+                "description": description[:255],
+                "price_gross": float(price),
+            })
+            inserted_sheet += 1
+
+        sheet_summary[family] = inserted_sheet
+        if skipped_sheet:
+            sheet_summary[f"{family}_omitidas"] = skipped_sheet
+
+    missing = [f for f in FAMILIES if f not in found_families]
+    return imported, skipped, sheet_summary, missing
+
+
+def price_family_stats(db):
+    rows = []
+    for f in FAMILIES:
+        total = db.query(PriceItem).filter(PriceItem.family == f, PriceItem.active == True).count()
+        min_price = db.query(func.min(PriceItem.price_gross)).filter(PriceItem.family == f, PriceItem.active == True).scalar()
+        max_price = db.query(func.max(PriceItem.price_gross)).filter(PriceItem.family == f, PriceItem.active == True).scalar()
+        rows.append({"family": f, "total": total, "min": min_price or 0, "max": max_price or 0})
+    return rows
 
 
 @app.on_event("startup")
@@ -345,12 +477,159 @@ def export_csv(request: Request, db: Session = Depends(db_session)):
 
 
 @app.get("/precios", response_class=HTMLResponse)
-def precios(request: Request, db: Session = Depends(db_session)):
+def precios(request: Request, family: str = "", q: str = "", db: Session = Depends(db_session)):
     user, redir = require_login(request, db)
-    if redir: return redir
-    rows = "".join(f"<tr><td>{p.family}</td><td>{p.product_code}</td><td>{p.description}</td><td>{money(p.price_gross)}</td></tr>" for p in db.query(PriceItem).order_by(PriceItem.family, PriceItem.price_gross).limit(200).all())
-    body = f"<h1>Precios</h1><section class='panel'><p>Esta versión trae precios base. Después agregamos importación Excel.</p><table><tr><th>Familia</th><th>Código</th><th>Descripción</th><th>Precio</th></tr>{rows}</table></section>"
+    if redir:
+        return redir
+
+    family_filter = normalize_family(family) if family else ""
+    query = db.query(PriceItem).filter(PriceItem.active == True)
+    if family_filter:
+        query = query.filter(PriceItem.family == family_filter)
+    q_text = q.strip()
+    if q_text:
+        like = f"%{q_text}%"
+        query = query.filter((PriceItem.product_code.ilike(like)) | (PriceItem.description.ilike(like)))
+
+    items = query.order_by(PriceItem.family, PriceItem.price_gross, PriceItem.product_code).limit(500).all()
+    stats = price_family_stats(db)
+    last_import = db.query(PriceImport).order_by(PriceImport.id.desc()).first()
+
+    cards = "".join(
+        f"<div class='card'><span>{s['family'].capitalize()}</span><strong>{s['total']}</strong><small>{money(s['min'])} a {money(s['max'])}</small></div>"
+        for s in stats
+    )
+
+    family_options = "<option value=''>Todas las familias</option>" + "".join(
+        f"<option value='{f}' {'selected' if f == family_filter else ''}>{f.capitalize()}</option>" for f in FAMILIES
+    )
+
+    rows = "".join(
+        f"<tr><td><b>{p.family}</b></td><td>{p.product_code}</td><td>{p.description}</td><td><b>{money(p.price_gross)}</b></td></tr>"
+        for p in items
+    ) or "<tr><td colspan='4'>Sin precios cargados para el filtro actual.</td></tr>"
+
+    import_info = ""
+    if last_import:
+        import_info = (
+            f"<div class='card'><span>Última actualización</span>"
+            f"<strong>{last_import.inserted_rows}</strong>"
+            f"<small>{last_import.created_at.strftime('%d-%m-%Y %H:%M')} · {last_import.file_name} · omitidas: {last_import.skipped_rows}</small></div>"
+        )
+
+    admin_upload = ""
+    if user.role == "admin":
+        admin_upload = """
+        <section class='panel'>
+            <h2>Actualizar precios desde Excel</h2>
+            <p>Sube la planilla base con hojas <b>vestuario</b>, <b>hogar</b>, <b>zapatillas</b> y <b>bolsos</b>. El sistema lee las primeras 3 columnas: <b>Código</b>, <b>Descripción</b> y <b>Precio Venta Bruto</b>. También acepta encabezados si existen.</p>
+            <form method='post' action='/precios/importar' enctype='multipart/form-data'>
+                <label>Archivo Excel .xlsx
+                    <input type='file' name='file' accept='.xlsx' required>
+                </label>
+                <label><input type='checkbox' name='confirm_replace' value='1' style='width:auto' required> Confirmo reemplazar completamente la tabla de precios actual</label>
+                <button>Importar y actualizar precios</button>
+            </form>
+        </section>
+        """
+
+    body = f"""
+    <h1>Precios base</h1>
+    <section class='cards'>{cards}{import_info}</section>
+    {admin_upload}
+    <section class='panel'>
+        <h2>Consulta de precios cargados</h2>
+        <form method='get' style='display:grid;grid-template-columns:220px 1fr 160px;gap:12px;align-items:end'>
+            <label>Familia<select name='family'>{family_options}</select></label>
+            <label>Buscar código/descripción<input name='q' value='{q_text}' placeholder='Ej: ITA07/VES o 76750'></label>
+            <button>Filtrar</button>
+        </form>
+        <p><a class='btn' href='/export/precios.csv'>Exportar precios CSV</a></p>
+        <table><tr><th>Familia</th><th>Código</th><th>Descripción</th><th>Precio</th></tr>{rows}</table>
+        <p style='color:#6b7280'>Mostrando máximo 500 filas. Usa el filtro para buscar códigos específicos.</p>
+    </section>
+    """
     return page("Precios", body, request, user)
+
+
+@app.post("/precios/importar")
+async def importar_precios(request: Request, file: UploadFile = File(...), confirm_replace: str = Form(None), db: Session = Depends(db_session)):
+    user, redir = require_login(request, db)
+    if redir:
+        return redir
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Solo administradores pueden importar precios")
+    if confirm_replace != "1":
+        return page("Error", "<div class='alert'>Debes confirmar el reemplazo completo de precios.</div><a href='/precios'>Volver</a>", request, user)
+    if not file.filename.lower().endswith(".xlsx"):
+        return page("Error", "<div class='alert'>Debes subir un archivo Excel .xlsx.</div><a href='/precios'>Volver</a>", request, user)
+
+    try:
+        content = await file.read()
+        items, skipped, sheet_summary, missing = parse_prices_excel(content)
+        if not items:
+            return page("Error", "<div class='alert'>No se encontraron precios válidos en el Excel. Revisa hojas y columnas.</div><a href='/precios'>Volver</a>", request, user)
+
+        db.query(PriceItem).delete()
+        for item in items:
+            db.add(PriceItem(**item, active=True))
+
+        detail_parts = [f"{k}: {v}" for k, v in sheet_summary.items()]
+        skipped_count = sum(v for k, v in sheet_summary.items() if k.endswith("_omitidas"))
+        if missing:
+            detail_parts.append("Hojas no encontradas: " + ", ".join(missing))
+        if skipped:
+            detail_parts.append("Omitidas: " + " | ".join(skipped[:10]))
+
+        log = PriceImport(
+            username=user.username,
+            file_name=file.filename,
+            total_rows=len(items) + skipped_count,
+            inserted_rows=len(items),
+            skipped_rows=skipped_count,
+            status="ok",
+            detail="; ".join(detail_parts)[:2000],
+        )
+        db.add(log)
+        db.commit()
+
+        resumen_familias = "".join(
+            f"<tr><td>{f}</td><td>{sheet_summary.get(f, 0)}</td><td>{sheet_summary.get(f + '_omitidas', 0)}</td></tr>"
+            for f in FAMILIES
+        )
+        body = f"""
+        <h1>Precios actualizados</h1>
+        <section class='panel'>
+            <div class='cards'>
+                <div class='card'><span>Registros importados</span><strong>{len(items)}</strong></div>
+                <div class='card'><span>Filas omitidas</span><strong>{skipped_count}</strong></div>
+                <div class='card'><span>Archivo</span><strong style='font-size:18px'>{file.filename}</strong></div>
+            </div>
+            <h2>Resumen por familia</h2>
+            <table><tr><th>Familia</th><th>Importadas</th><th>Omitidas</th></tr>{resumen_familias}</table>
+            <p><a class='btn' href='/precios'>Ver precios cargados</a> <a class='btn' href='/etiquetas'>Ir a etiquetar</a></p>
+        </section>
+        """
+        return page("Precios actualizados", body, request, user)
+    except Exception as exc:
+        db.rollback()
+        db.add(PriceImport(username=user.username, file_name=file.filename, total_rows=0, inserted_rows=0, skipped_rows=0, status="error", detail=str(exc)[:2000]))
+        db.commit()
+        return page("Error", f"<div class='alert'>No se pudo importar el Excel: {str(exc)}</div><a href='/precios'>Volver</a>", request, user)
+
+
+@app.get("/export/precios.csv")
+def export_precios_csv(request: Request, db: Session = Depends(db_session)):
+    user, redir = require_login(request, db)
+    if redir:
+        return redir
+    out = io.StringIO()
+    writer = csv.writer(out, delimiter=";")
+    writer.writerow(["familia", "codigo_producto", "descripcion", "precio_venta_bruto", "activo"])
+    for p in db.query(PriceItem).order_by(PriceItem.family, PriceItem.price_gross, PriceItem.product_code).all():
+        writer.writerow([p.family, p.product_code, p.description, int(round(p.price_gross)), "SI" if p.active else "NO"])
+    out.seek(0)
+    return StreamingResponse(iter([out.getvalue()]), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=precios_base_lamericana.csv"})
 
 
 @app.post("/api/agent/weight")
