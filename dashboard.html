@@ -1,23 +1,13 @@
 {% extends "base.html" %}
-{% block content %}
-<div class="login-card">
-  <h1>Ingreso LA ERP Cloud</h1>
-  <p class="muted">Módulo de producción y etiquetas para La Americana.</p>
-  {% if error %}<div class="alert">{{ error }}</div>{% endif %}
-  <form method="post" action="/login" class="form-grid single">
-    <label>Usuario
-      <input name="username" autocomplete="username" required autofocus>
-    </label>
-    <label>Clave
-      <input name="password" type="password" autocomplete="current-password" required>
-    </label>
-    <label>Terminal
-      <select name="terminal">
-        {% for t in terminals %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
-      </select>
-    </label>
-    <button class="primary" type="submit">Entrar</button>
+{% block title %}Ingreso · La Americana Cloud{% endblock %}
+{% block public %}
+<div class="login-wrap">
+  <form class="login-card" method="post">
+    <div class="brand">La Americana Cloud<small>RUZ Technology company</small></div>
+    {% for category, message in get_flashed_messages(with_categories=true) %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
+    <div class="field"><label>Usuario</label><input class="input" name="username" autocomplete="username" autofocus></div><br>
+    <div class="field"><label>Clave</label><input class="input" name="password" type="password" autocomplete="current-password"></div><br>
+    <button class="btn" style="width:100%">Ingresar</button>
   </form>
-  <p class="hint">Usuario inicial: gustavo · clave inicial: 1176. Cámbiala cuando dejemos el módulo de usuarios completo.</p>
 </div>
 {% endblock %}

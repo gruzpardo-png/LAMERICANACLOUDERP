@@ -1,7 +1,29 @@
-Flask==3.1.1
-Flask-SQLAlchemy==3.1.1
-gunicorn==23.0.0
-psycopg2-binary==2.9.10
-pandas==2.2.3
-openpyxl==3.1.5
-Werkzeug==3.1.3
+services:
+  - type: web
+    name: lamericana-cloud
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_USER
+        value: gustavo
+      - key: ADMIN_PASSWORD
+        value: "1176"
+      - key: ADMIN_CODE
+        value: GS
+      - key: ADMIN_NAME
+        value: Gustavo
+      - key: DATABASE_URL
+        fromDatabase:
+          name: lamericana-cloud-db
+          property: connectionString
+
+databases:
+  - name: lamericana-cloud-db
+    databaseName: lamericana_cloud
+    user: lamericana_cloud_user
+    plan: starter

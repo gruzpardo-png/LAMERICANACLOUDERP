@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block header %}Dashboard producción{% endblock %}
+{% block content %}
+<form class="panel filters" method="get">
+  <div class="field"><label>Desde</label><input type="date" name="start" value="{{ request.args.get('start','') }}"></div>
+  <div class="field"><label>Hasta</label><input type="date" name="end" value="{{ request.args.get('end','') }}"></div>
+  <div class="field"><label>Familia</label><select name="familia"><option value="">Todas</option>{% for f in families %}<option value="{{ f.name }}" {% if request.args.get('familia')==f.name %}selected{% endif %}>{{ f.display_name }}</option>{% endfor %}</select></div>
+  <div class="field"><label>IN / Producción</label><input name="in" value="{{ request.args.get('in','') }}" placeholder="Ej: TA, BALA, MIX"></div>
+  <div class="field"><label>Usuario</label><select name="usuario"><option value="">Todos</option>{% for u in users %}<option value="{{ u.username }}" {% if request.args.get('usuario')==u.username %}selected{% endif %}>{{ u.username }}</option>{% endfor %}</select></div>
+  <div class="field"><label>Terminal</label><select name="terminal"><option value="">Todas</option>{% for t in terminals %}<option value="{{ t }}" {% if request.args.get('terminal')==t %}selected{% endif %}>{{ t }}</option>{% endfor %}</select></div>
+  <button class="btn">Filtrar</button><a class="btn secondary" href="{{ url_for('dashboard') }}">Limpiar</a>
+</form>
+<div class="grid cards">
+  <div class="card"><div class="metric-label">Etiquetas reales</div><div class="metric">{{ totals.raw_labels }}</div><div class="muted">Incluye etiquetas sueltas.</div></div>
+  <div class="card"><div class="metric-label">Unidades dashboard</div><div class="metric">{{ totals.units }}</div><div class="muted">Zapatillas: 2 etiquetas = 1 unidad.</div></div>
+  <div class="card"><div class="metric-label">Monto producido</div><div class="metric">{{ totals.amount|clp }}</div><div class="muted">Zapatillas sueltas no suman.</div></div>
+  <div class="card"><div class="metric-label">Kilos producidos</div><div class="metric">{{ totals.kg|kg }}</div><div class="muted">Suma corregida por pares.</div></div>
+</div>
+<div class="row">
+  <section class="panel"><h2>Resumen por día</h2><div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Etiquetas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_date|reverse %}<tr><td>{{ r.key }}</td><td>{{ r.raw_labels }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div></section>
+  <section class="panel"><h2>Resumen por IN / descripción producción</h2><div class="table-wrap"><table><thead><tr><th>IN</th><th>Etiquetas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_in %}<tr><td>{{ r.key }}</td><td>{{ r.raw_labels }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div></section>
+</div>
+<section class="panel"><h2>Resumen por familia</h2><div class="table-wrap"><table><thead><tr><th>Familia</th><th>Etiquetas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_family %}<tr><td>{{ r.key }}</td><td>{{ r.raw_labels }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}
