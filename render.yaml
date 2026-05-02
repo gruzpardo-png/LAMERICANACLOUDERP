@@ -1,5 +1,6 @@
-{% extends "base.html" %}
-{% block header %}Auditoría{% endblock %}
-{% block content %}
-<section class="panel"><h2>Últimos eventos</h2><div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Actor</th><th>Acción</th><th>Detalle</th></tr></thead><tbody>{% for r in rows %}<tr><td>{{ r.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td><td>{{ r.actor }}</td><td>{{ r.action }}</td><td>{{ r.detail }}</td></tr>{% endfor %}</tbody></table></div></section>
-{% endblock %}
+SECRET_KEY=change-me
+DATABASE_URL=sqlite:///lamericana_cloud.sqlite3
+ADMIN_USER=gustavo
+ADMIN_PASSWORD=1176
+ADMIN_CODE=GS
+ADMIN_NAME=Gustavo
