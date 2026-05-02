@@ -1,59 +1,1488 @@
-:root {
-  --bg: #f5f7fb;
-  --panel: #ffffff;
-  --text: #1f2937;
-  --muted: #6b7280;
-  --brand: #8b1d3d;
-  --brand-dark: #5f1028;
-  --line: #e5e7eb;
-  --ok: #0f766e;
-  --warn: #b45309;
-}
-* { box-sizing: border-box; }
-body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: var(--text); background: var(--bg); }
-a { color: var(--brand); text-decoration: none; font-weight: 700; }
-.topbar { display: flex; justify-content: space-between; align-items: center; padding: 14px 22px; background: #111827; color: white; position: sticky; top: 0; z-index: 10; }
-.topbar nav { display: flex; gap: 16px; flex-wrap: wrap; }
-.topbar a { color: white; opacity: .92; }
-.topbar a:hover { opacity: 1; text-decoration: underline; }
-.sessionbar { background: #fff7ed; border-bottom: 1px solid #fed7aa; padding: 8px 22px; font-size: 14px; }
-.container { width: min(1280px, calc(100% - 32px)); margin: 22px auto 60px; }
-h1 { margin: 0 0 16px; font-size: 30px; }
-h2 { margin: 0 0 14px; font-size: 20px; }
-.muted { color: var(--muted); }
-.hint { color: var(--muted); font-size: 13px; margin-top: 16px; }
-.alert { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; padding: 10px; border-radius: 10px; margin: 12px 0; }
-.login-card { width: min(460px, 100%); margin: 60px auto; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 28px; box-shadow: 0 10px 30px rgba(0,0,0,.06); }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-bottom: 18px; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; box-shadow: 0 6px 18px rgba(0,0,0,.04); }
-.card span { display: block; color: var(--muted); margin-bottom: 8px; }
-.card strong { font-size: 30px; color: var(--brand); }
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; margin-bottom: 18px; box-shadow: 0 6px 18px rgba(0,0,0,.04); overflow-x: auto; }
-.row-between { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
-.button, button, .primary { border: 0; border-radius: 10px; padding: 10px 14px; cursor: pointer; font-weight: 800; background: #e5e7eb; color: #111827; }
-.primary { background: var(--brand); color: white; }
-.primary:hover { background: var(--brand-dark); }
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th, td { border-bottom: 1px solid var(--line); padding: 10px 8px; text-align: left; vertical-align: top; }
-th { background: #f9fafb; color: #374151; font-size: 13px; }
-.form-grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 14px; }
-.form-grid.single { grid-template-columns: 1fr; }
-.form-inline { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-label { display: grid; gap: 6px; font-weight: 700; color: #374151; }
-input, select { width: 100%; border: 1px solid #d1d5db; border-radius: 10px; padding: 11px 12px; font-size: 15px; background: white; }
-.check { display: flex; flex-direction: row; align-items: center; gap: 8px; font-weight: 700; }
-.check input { width: auto; }
-.hidden { display: none; }
-.weight-box { background: #ecfeff; border: 1px solid #a5f3fc; border-radius: 16px; padding: 16px; margin-bottom: 14px; }
-.weight-box span { display: block; color: var(--muted); }
-.weight-box strong { display: block; font-size: 38px; color: var(--ok); margin: 6px 0; }
-.weight-box small { color: var(--muted); }
-.label-preview { width: 360px; max-width: 100%; background: white; border: 2px dashed #111827; border-radius: 8px; padding: 12px; font-family: Arial, Helvetica, sans-serif; }
-.label-preview .price { font-size: 48px; font-weight: 900; text-align: center; margin-bottom: 8px; }
-.label-preview .barcode { letter-spacing: 4px; font-size: 26px; text-align: center; border-top: 1px solid #111827; border-bottom: 1px solid #111827; margin: 8px 0; padding: 6px 0; overflow: hidden; white-space: nowrap; }
-@media (max-width: 860px) {
-  .topbar { align-items: flex-start; gap: 10px; flex-direction: column; }
-  .grid-2, .form-grid { grid-template-columns: 1fr; }
-  .card strong { font-size: 24px; }
-}
+"""
+LAMERICANA LABEL CLOUD - Terminal local de etiquetas
+RUZ Technology company
+
+Objetivo:
+- La nube administra usuarios, precios, familias, permisos y dashboard.
+- El PC local imprime etiquetas, lee balanza COM, guarda producción en SQLite y sincroniza a Render.
+- No hay credenciales de PostgreSQL dentro del EXE.
+
+Instalar dependencias Windows:
+    pip install requests pandas openpyxl pyserial python-barcode pillow pywin32 werkzeug
+
+Compilar a EXE después:
+    pyinstaller --onefile --windowed lamericana_labeler_local.py
+"""
+
+import hashlib
+import io
+import json
+import os
+import queue
+import re
+import sqlite3
+import string
+import threading
+import time
+import uuid
+from datetime import datetime, timedelta
+
+import tkinter as tk
+from tkinter import ttk, messagebox, simpledialog
+
+try:
+    import requests
+except Exception:
+    requests = None
+
+try:
+    import pandas as pd
+except Exception:
+    pd = None
+
+try:
+    import serial
+    import serial.tools.list_ports
+except Exception:
+    serial = None
+
+try:
+    from barcode import Code39
+    from barcode.writer import ImageWriter
+except Exception:
+    Code39 = None
+    ImageWriter = None
+
+try:
+    from PIL import Image, ImageDraw, ImageTk, ImageFont, ImageWin
+except Exception:
+    Image = ImageDraw = ImageTk = ImageFont = ImageWin = None
+
+try:
+    import win32print
+    import win32ui
+    import win32con
+    import win32gui
+except Exception:
+    win32print = win32ui = win32con = win32gui = None
+
+try:
+    from werkzeug.security import check_password_hash, generate_password_hash
+except Exception:
+    check_password_hash = None
+    generate_password_hash = None
+
+
+APP_TITLE = "DOGEFIX CODIFICADOR ROPA"
+APP_FOOTER = "RUZ Technology company"
+LOCAL_DB = "lamericana_terminal.sqlite3"
+CONFIG_FILE = "terminal_config.json"
+LEGACY_HISTORY_FILE = "historial_etiquetas.csv"
+LEGACY_PRICES_FILE = "prices.xlsx"
+DEFAULT_COM_PORT = "COM3"
+DEFAULT_BAUDRATE = 9600
+TERMINAL_OPTIONS = ["T1", "T2", "T3", "T4"]
+SYNC_VALID_HOURS_DEFAULT = 24
+FAMILIAS_DEFAULT = ["vestuario", "hogar", "zapatillas", "bolsos"]
+
+# Cambia esto o déjalo vacío para configurarlo desde el login.
+DEFAULT_API_BASE_URL = os.getenv("LAMERICANA_API_URL", "https://cloud.lamericana.cl")
+
+
+# =========================================================
+# Utilidades
+# =========================================================
+
+def now_str():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def clp_to_int(value):
+    if value is None:
+        return 0
+    if isinstance(value, (int, float)):
+        return int(round(float(value)))
+    s = str(value).strip()
+    s = s.replace("$", "").replace(" ", "")
+    s = re.sub(r"[^0-9]", "", s)
+    return int(s) if s else 0
+
+
+def parse_weight(value):
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).lower().replace("kg", "").replace(",", ".").strip()
+    m = re.search(r"[-+]?\d*\.\d+|\d+", s)
+    return float(m.group()) if m else 0.0
+
+
+def format_clp(value):
+    try:
+        return "$" + f"{int(round(float(value))):,}".replace(",", ".")
+    except Exception:
+        return str(value)
+
+
+def normalize_excel_code(value):
+    if pd is not None:
+        try:
+            if pd.isna(value):
+                return ""
+        except Exception:
+            pass
+    if isinstance(value, (int, float)):
+        try:
+            if float(value).is_integer():
+                return str(int(value))
+        except Exception:
+            pass
+    s = str(value).strip()
+    if re.fullmatch(r"\d+\.0", s):
+        s = s[:-2]
+    return s
+
+
+def safe_json(data):
+    return json.dumps(data or {}, ensure_ascii=False)
+
+
+def read_json(text, default=None):
+    try:
+        return json.loads(text or "{}")
+    except Exception:
+        return default if default is not None else {}
+
+
+# =========================================================
+# Base local SQLite
+# =========================================================
+
+class LocalStore:
+    def __init__(self, path=LOCAL_DB):
+        self.path = path
+        self.conn = sqlite3.connect(self.path, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self.lock = threading.Lock()
+        self.init_db()
+        self.seed_default_if_empty()
+        self.migrate_legacy_once()
+        self.import_prices_excel_once()
+
+    def execute(self, sql, params=()):
+        with self.lock:
+            cur = self.conn.execute(sql, params)
+            self.conn.commit()
+            return cur
+
+    def query(self, sql, params=()):
+        with self.lock:
+            return self.conn.execute(sql, params).fetchall()
+
+    def one(self, sql, params=()):
+        with self.lock:
+            return self.conn.execute(sql, params).fetchone()
+
+    def init_db(self):
+        self.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""")
+        self.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL,
+            code TEXT NOT NULL,
+            full_name TEXT NOT NULL,
+            role TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            permissions_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL
+        )""")
+        self.execute("""
+        CREATE TABLE IF NOT EXISTS families (
+            name TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            order_index INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        )""")
+        self.execute("""
+        CREATE TABLE IF NOT EXISTS price_products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family TEXT NOT NULL,
+            product_code TEXT NOT NULL,
+            description TEXT NOT NULL,
+            gross_price INTEGER NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL
+        )""")
+        self.execute("CREATE INDEX IF NOT EXISTS idx_price_family_price ON price_products(family, gross_price)")
+        self.execute("""
+        CREATE TABLE IF NOT EXISTS production (
+            local_uuid TEXT PRIMARY KEY,
+            timestamp TEXT NOT NULL,
+            usuario TEXT NOT NULL,
+            codigo_usuario TEXT NOT NULL,
+            terminal TEXT NOT NULL,
+            familia TEXT NOT NULL,
+            modo TEXT NOT NULL,
+            modo_impresion TEXT NOT NULL,
+            precio_int INTEGER NOT NULL,
+            peso_kg REAL NOT NULL,
+            codigo_producto TEXT NOT NULL,
+            descripcion TEXT NOT NULL,
+            idx TEXT NOT NULL,
+            in_desc TEXT NOT NULL,
+            fecha_balanza TEXT NOT NULL,
+            hora_balanza TEXT NOT NULL,
+            raw_json TEXT NOT NULL DEFAULT '{}',
+            synced INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )""")
+        self.execute("CREATE INDEX IF NOT EXISTS idx_prod_synced ON production(synced)")
+        self.execute("CREATE INDEX IF NOT EXISTS idx_prod_timestamp ON production(timestamp)")
+
+    def get_setting(self, key, default=""):
+        row = self.one("SELECT value FROM settings WHERE key=?", (key,))
+        return row["value"] if row else default
+
+    def set_setting(self, key, value):
+        self.execute("REPLACE INTO settings(key,value,updated_at) VALUES(?,?,?)", (key, str(value), now_str()))
+
+    def seed_default_if_empty(self):
+        if self.one("SELECT COUNT(*) c FROM users")["c"] > 0:
+            return
+        if generate_password_hash is None:
+            return
+        default_permissions = {
+            "manage_users": True,
+            "manage_prices": True,
+            "view_dashboard": True,
+            "view_production": True,
+            "print_labels": True,
+            "use_target_price": True,
+            "connect_scale": True,
+        }
+        self.execute(
+            "INSERT INTO users(username,password_hash,code,full_name,role,active,permissions_json,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            ("gustavo", generate_password_hash("1176"), "GS", "Gustavo", "admin", 1, safe_json(default_permissions), now_str()),
+        )
+        for idx, fam in enumerate(FAMILIAS_DEFAULT, start=1):
+            self.execute("REPLACE INTO families(name,display_name,active,order_index,updated_at) VALUES(?,?,?,?,?)", (fam, fam.title(), 1, idx, now_str()))
+        self.set_setting("api_base_url", DEFAULT_API_BASE_URL)
+        self.set_setting("sync_valid_hours", str(SYNC_VALID_HOURS_DEFAULT))
+        self.set_setting("shoe_family_names", "zapatillas,zapatos,calzado")
+
+    def cache_bootstrap(self, payload):
+        server_time = payload.get("server_time") or now_str()
+        for s_key, s_val in (payload.get("settings") or {}).items():
+            self.set_setting(s_key, s_val)
+
+        for user in payload.get("users") or []:
+            if not user.get("username") or not user.get("password_hash"):
+                continue
+            self.execute(
+                "REPLACE INTO users(username,password_hash,code,full_name,role,active,permissions_json,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    user["username"].lower(),
+                    user["password_hash"],
+                    user.get("code") or "--",
+                    user.get("full_name") or user.get("code") or user["username"],
+                    user.get("role") or "operator",
+                    1 if user.get("active", True) else 0,
+                    safe_json(user.get("permissions") or {}),
+                    user.get("updated_at") or server_time,
+                ),
+            )
+
+        self.execute("DELETE FROM families")
+        for fam in payload.get("families") or []:
+            self.execute(
+                "REPLACE INTO families(name,display_name,active,order_index,updated_at) VALUES(?,?,?,?,?)",
+                (
+                    fam.get("name"),
+                    fam.get("display_name") or fam.get("name", "").title(),
+                    1 if fam.get("active", True) else 0,
+                    int(fam.get("order_index") or 0),
+                    fam.get("updated_at") or server_time,
+                ),
+            )
+
+        self.execute("DELETE FROM price_products")
+        for p in payload.get("prices") or []:
+            if not p.get("family") or not p.get("product_code"):
+                continue
+            self.execute(
+                "INSERT INTO price_products(family,product_code,description,gross_price,active,updated_at) VALUES(?,?,?,?,?,?)",
+                (
+                    p.get("family"),
+                    str(p.get("product_code")),
+                    p.get("description") or "",
+                    int(p.get("gross_price") or 0),
+                    1 if p.get("active", True) else 0,
+                    p.get("updated_at") or server_time,
+                ),
+            )
+        self.set_setting("last_bootstrap", now_str())
+
+    def get_user(self, username):
+        row = self.one("SELECT * FROM users WHERE username=?", (username.lower(),))
+        if not row:
+            return None
+        d = dict(row)
+        d["permissions"] = read_json(d.pop("permissions_json"), {})
+        d["active"] = bool(d["active"])
+        return d
+
+    def authenticate_offline(self, username, password):
+        user = self.get_user(username)
+        if not user or not user.get("active"):
+            return None
+        if check_password_hash is None:
+            return None
+        last_bootstrap = self.get_setting("last_bootstrap", "")
+        valid_hours = int(self.get_setting("sync_valid_hours", str(SYNC_VALID_HOURS_DEFAULT)) or SYNC_VALID_HOURS_DEFAULT)
+        if last_bootstrap:
+            try:
+                age = datetime.now() - datetime.strptime(last_bootstrap[:19], "%Y-%m-%d %H:%M:%S")
+                if age > timedelta(hours=valid_hours):
+                    # Seguridad: si el cache venció, igual permitimos admin local de emergencia.
+                    if user.get("role") != "admin":
+                        return None
+            except Exception:
+                pass
+        if check_password_hash(user["password_hash"], password):
+            return user
+        return None
+
+    def get_families(self):
+        rows = self.query("SELECT * FROM families WHERE active=1 ORDER BY order_index, name")
+        return [dict(r) for r in rows]
+
+    def price_count(self):
+        return self.one("SELECT COUNT(*) c FROM price_products")["c"]
+
+    def prices_df_by_family(self):
+        if pd is None:
+            return {fam: [] for fam in FAMILIAS_DEFAULT}
+        rows = self.query("SELECT family,product_code,description,gross_price FROM price_products WHERE active=1 ORDER BY family,gross_price")
+        data = {}
+        for row in rows:
+            data.setdefault(row["family"], []).append({
+                "Código Producto": row["product_code"],
+                "Descripción": row["description"],
+                "Precio Venta Bruto": row["gross_price"],
+            })
+        return {family: pd.DataFrame(items) for family, items in data.items()}
+
+    def import_prices_excel_once(self):
+        if self.price_count() > 0 or pd is None or not os.path.exists(LEGACY_PRICES_FILE):
+            return
+        try:
+            xl = pd.ExcelFile(LEGACY_PRICES_FILE)
+            for sheet in xl.sheet_names:
+                family = sheet.strip().lower()
+                df = pd.read_excel(xl, sheet_name=sheet, header=None).iloc[:, :3].copy()
+                df.columns = ["product_code", "description", "gross_price"]
+                df = df.dropna(how="all")
+                self.execute("REPLACE INTO families(name,display_name,active,order_index,updated_at) VALUES(?,?,?,?,?)", (family, family.title(), 1, 99, now_str()))
+                for _, r in df.iterrows():
+                    code = normalize_excel_code(r.get("product_code"))
+                    price = clp_to_int(r.get("gross_price"))
+                    if not code or price <= 0:
+                        continue
+                    self.execute(
+                        "INSERT INTO price_products(family,product_code,description,gross_price,active,updated_at) VALUES(?,?,?,?,?,?)",
+                        (family, code, str(r.get("description") or "").strip(), price, 1, now_str()),
+                    )
+            self.set_setting("legacy_prices_imported", now_str())
+        except Exception as exc:
+            print(f"No se pudieron importar precios Excel local: {exc}")
+
+    def parse_legacy_history_text(self, text):
+        rows = []
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if not line.strip():
+                continue
+            if lineno == 1 and line.lower().startswith("timestamp,"):
+                continue
+            parts = line.rstrip("\n").split(",")
+            if len(parts) < 10:
+                continue
+            try:
+                if len(parts) >= 15 and parts[4].strip().lower() in {"vestuario", "hogar", "zapatillas", "bolsos", "zapatos", "calzado"}:
+                    item = {
+                        "timestamp": parts[0], "usuario": parts[1], "codigo_usuario": parts[2], "terminal": parts[3],
+                        "familia": parts[4], "modo": parts[5], "modo_impresion": parts[6], "precio_int": clp_to_int(parts[7]),
+                        "peso_kg": parse_weight(parts[8]), "codigo_producto": parts[9], "descripcion": parts[10], "idx": parts[11],
+                        "in_desc": ",".join(parts[12:-2]), "fecha_balanza": parts[-2], "hora_balanza": parts[-1],
+                    }
+                else:
+                    item = {
+                        "timestamp": parts[0], "usuario": parts[1], "codigo_usuario": parts[2], "terminal": parts[3],
+                        "familia": "", "modo": parts[4], "modo_impresion": "", "precio_int": clp_to_int(parts[5]),
+                        "peso_kg": parse_weight(parts[6]), "codigo_producto": parts[7], "descripcion": "", "idx": parts[8],
+                        "in_desc": ",".join(parts[9:-2]), "fecha_balanza": parts[-2], "hora_balanza": parts[-1],
+                    }
+                item["local_uuid"] = hashlib.sha256(line.encode("utf-8", errors="ignore")).hexdigest()
+                rows.append(item)
+            except Exception:
+                continue
+        return rows
+
+    def migrate_legacy_once(self):
+        if self.get_setting("legacy_history_imported") or not os.path.exists(LEGACY_HISTORY_FILE):
+            return
+        try:
+            with open(LEGACY_HISTORY_FILE, "r", encoding="utf-8-sig", errors="replace") as f:
+                text = f.read()
+            inserted = 0
+            for item in self.parse_legacy_history_text(text):
+                if self.one("SELECT local_uuid FROM production WHERE local_uuid=?", (item["local_uuid"],)):
+                    continue
+                self.save_production(item, synced=0)
+                inserted += 1
+            self.set_setting("legacy_history_imported", now_str())
+            print(f"Historial CSV migrado a SQLite: {inserted} registros")
+        except Exception as exc:
+            print(f"No se pudo migrar CSV antiguo: {exc}")
+
+    def save_production(self, item, synced=0):
+        payload = dict(item)
+        local_uuid = payload.get("local_uuid") or str(uuid.uuid4())
+        payload["local_uuid"] = local_uuid
+        self.execute(
+            """
+            INSERT OR IGNORE INTO production(local_uuid,timestamp,usuario,codigo_usuario,terminal,familia,modo,modo_impresion,precio_int,peso_kg,codigo_producto,descripcion,idx,in_desc,fecha_balanza,hora_balanza,raw_json,synced,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                local_uuid,
+                payload.get("timestamp") or now_str(),
+                payload.get("usuario") or "",
+                payload.get("codigo_usuario") or "",
+                payload.get("terminal") or "",
+                payload.get("familia") or "",
+                payload.get("modo") or "",
+                payload.get("modo_impresion") or "",
+                int(payload.get("precio_int") or clp_to_int(payload.get("precio"))),
+                float(payload.get("peso_kg") or parse_weight(payload.get("peso"))),
+                payload.get("codigo_producto") or "",
+                payload.get("descripcion") or "",
+                payload.get("idx") or "",
+                payload.get("in_desc") or payload.get("in") or "",
+                payload.get("fecha_balanza") or "",
+                payload.get("hora_balanza") or "",
+                safe_json(payload),
+                int(synced),
+                now_str(),
+            ),
+        )
+        return local_uuid
+
+    def pending_production(self, limit=200):
+        rows = self.query("SELECT * FROM production WHERE synced=0 ORDER BY created_at LIMIT ?", (limit,))
+        out = []
+        for r in rows:
+            out.append({
+                "local_uuid": r["local_uuid"],
+                "timestamp": r["timestamp"],
+                "usuario": r["usuario"],
+                "codigo_usuario": r["codigo_usuario"],
+                "terminal": r["terminal"],
+                "familia": r["familia"],
+                "modo": r["modo"],
+                "modo_impresion": r["modo_impresion"],
+                "precio_int": r["precio_int"],
+                "peso_kg": r["peso_kg"],
+                "codigo_producto": r["codigo_producto"],
+                "descripcion": r["descripcion"],
+                "idx": r["idx"],
+                "in_desc": r["in_desc"],
+                "fecha_balanza": r["fecha_balanza"],
+                "hora_balanza": r["hora_balanza"],
+            })
+        return out
+
+    def mark_synced(self, uuids):
+        for u in uuids:
+            self.execute("UPDATE production SET synced=1 WHERE local_uuid=?", (u,))
+
+
+# =========================================================
+# Cliente cloud API
+# =========================================================
+
+class CloudClient:
+    def __init__(self, base_url=""):
+        self.base_url = (base_url or "").strip().rstrip("/")
+        self.token = ""
+
+    def available(self):
+        return bool(requests and self.base_url and self.base_url.startswith("http"))
+
+    def headers(self):
+        return {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"}
+
+    def login(self, username, password, terminal, device_id):
+        if not self.available():
+            raise RuntimeError("API no configurada o requests no instalado")
+        r = requests.post(
+            f"{self.base_url}/api/v1/auth/login",
+            json={"username": username, "password": password, "terminal": terminal, "device_id": device_id},
+            timeout=12,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("ok"):
+            raise RuntimeError(data.get("error") or "login rechazado")
+        self.token = data["token"]
+        return data
+
+    def bootstrap(self):
+        r = requests.get(f"{self.base_url}/api/v1/bootstrap", headers=self.headers(), timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("ok"):
+            raise RuntimeError(data.get("error") or "bootstrap rechazado")
+        return data
+
+    def sync_production(self, items):
+        if not items:
+            return {"ok": True, "inserted": 0, "skipped": 0}
+        r = requests.post(f"{self.base_url}/api/v1/production/bulk", headers=self.headers(), json={"items": items}, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("ok"):
+            raise RuntimeError(data.get("error") or "sync rechazado")
+        return data
+
+
+# =========================================================
+# Login UI
+# =========================================================
+
+class LoginDialog(simpledialog.Dialog):
+    def __init__(self, parent, app_ref):
+        self.app_ref = app_ref
+        self.result_data = None
+        super().__init__(parent, title="Ingreso LAMERICANA")
+
+    def body(self, master):
+        self.geometry("460x260")
+        ttk.Label(master, text="API cloud:").grid(row=0, column=0, sticky="w", padx=8, pady=8)
+        ttk.Label(master, text="Usuario:").grid(row=1, column=0, sticky="w", padx=8, pady=8)
+        ttk.Label(master, text="Clave:").grid(row=2, column=0, sticky="w", padx=8, pady=8)
+        ttk.Label(master, text="Terminal:").grid(row=3, column=0, sticky="w", padx=8, pady=8)
+        self.api = ttk.Entry(master, width=42)
+        self.user = ttk.Entry(master, width=24)
+        self.passw = ttk.Entry(master, width=24, show="*")
+        self.term = ttk.Combobox(master, values=TERMINAL_OPTIONS, state="readonly", width=21)
+        self.api.insert(0, self.app_ref.store.get_setting("api_base_url", DEFAULT_API_BASE_URL))
+        self.term.set(self.app_ref.store.get_setting("terminal", TERMINAL_OPTIONS[0]) or TERMINAL_OPTIONS[0])
+        self.api.grid(row=0, column=1, padx=8, pady=8)
+        self.user.grid(row=1, column=1, padx=8, pady=8, sticky="w")
+        self.passw.grid(row=2, column=1, padx=8, pady=8, sticky="w")
+        self.term.grid(row=3, column=1, padx=8, pady=8, sticky="w")
+        ttk.Label(master, text="Si no hay internet, usa caché local válido.", foreground="#7a8798").grid(row=4, column=0, columnspan=2, sticky="w", padx=8, pady=8)
+        return self.user
+
+    def validate(self):
+        api_url = self.api.get().strip().rstrip("/")
+        username = self.user.get().strip().lower()
+        password = self.passw.get().strip()
+        terminal = self.term.get().strip()
+        if not username or not password or not terminal:
+            messagebox.showerror("Error", "Completa usuario, clave y terminal.", parent=self)
+            return False
+        ok, msg = self.app_ref.perform_login(api_url, username, password, terminal)
+        if not ok:
+            messagebox.showerror("Ingreso rechazado", msg, parent=self)
+            return False
+        self.result_data = {"username": username, "terminal": terminal, "api_url": api_url}
+        return True
+
+    def apply(self):
+        self.result = self.result_data
+
+
+# =========================================================
+# Balanza
+# =========================================================
+
+def conectar_balanza(puerto, baudrate=9600, timeout=1):
+    if serial is None:
+        return None
+    try:
+        balanza = serial.Serial(
+            port=puerto,
+            baudrate=baudrate,
+            timeout=timeout,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE,
+        )
+        try:
+            balanza.reset_input_buffer()
+            balanza.reset_output_buffer()
+        except Exception:
+            pass
+        return balanza
+    except Exception as e:
+        print(f"Error al conectar con la balanza: {e}")
+        return None
+
+
+def normalizar_linea_balanza(datos):
+    if isinstance(datos, bytes):
+        datos = datos.decode("utf-8", errors="ignore")
+    datos = datos.replace("\x02", "").replace("\x03", "").replace("M", "").strip()
+    datos = re.sub(r"\s+", " ", datos)
+    return datos
+
+
+def extraer_peso_desde_linea(datos):
+    datos = normalizar_linea_balanza(datos)
+    if not datos:
+        return None
+    match = re.search(r"[-+]?\d*\.\d+|\d+", datos)
+    if not match:
+        return None
+    try:
+        valor = float(match.group())
+    except Exception:
+        return None
+    if abs(valor) >= 10:
+        return valor / 1000.0
+    return valor
+
+
+def leer_pesos(balanza, data_queue, stop_event):
+    peso_anterior = None
+    contador_estabilidad = 0
+    peso_estable = None
+    while not stop_event.is_set():
+        try:
+            if balanza and balanza.is_open:
+                data_available = balanza.in_waiting
+                if data_available:
+                    raw_data = balanza.read(data_available)
+                    texto = raw_data.decode("utf-8", errors="ignore")
+                    lineas = texto.splitlines() or ([texto] if texto.strip() else [])
+                    for datos in lineas:
+                        peso_kg = extraer_peso_desde_linea(datos)
+                        if peso_kg is None:
+                            continue
+                        token = f"{peso_kg:.3f}"
+                        if token == peso_anterior:
+                            contador_estabilidad += 1
+                        else:
+                            contador_estabilidad = 1
+                            peso_anterior = token
+                        if contador_estabilidad >= 5 and token != peso_estable:
+                            data_queue.put((peso_kg, datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%H:%M:%S")))
+                            peso_estable = token
+                else:
+                    time.sleep(0.01)
+            else:
+                time.sleep(1)
+        except Exception as e:
+            print(f"Error lectura balanza: {e}")
+            time.sleep(1)
+
+
+# =========================================================
+# App principal local
+# =========================================================
+
+class BalanzaApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title(APP_TITLE)
+        self.root.geometry("1366x768")
+        self.root.minsize(1180, 680)
+
+        self.store = LocalStore()
+        self.cloud = CloudClient(self.store.get_setting("api_base_url", DEFAULT_API_BASE_URL))
+        self.device_id = self.store.get_setting("device_id", "") or str(uuid.uuid4())
+        self.store.set_setting("device_id", self.device_id)
+
+        self.current_user = None
+        self.current_terminal = None
+        self.productos_por_familia = self.store.prices_df_by_family()
+        self.idx_value = 0.0
+
+        self.data_queue = queue.Queue()
+        self.stop_event = threading.Event()
+        self.balanza = None
+        self.balanza_conectada = False
+        self.hilo_lectura = None
+
+        self.barcode_pil_image = None
+        self.preview_label_tk = None
+        self.last_label_image = None
+
+        self._build_vars()
+        self.setup_theme()
+        self.crear_interfaz()
+        self.root.after(100, self.actualizar_etiquetas)
+        self.root.after(2000, self.sync_pending_async)
+        self.solicitar_login_inicial()
+
+    # -------------------------
+    # Theme
+    # -------------------------
+    def setup_theme(self):
+        """
+        Tema clásico del software original, manteniendo la infraestructura nueva:
+        API cloud, SQLite local, usuarios/precios sincronizados y producción pendiente.
+        """
+        self.COLORS = {
+            "bg": "#F0F8FF",
+            "panel": "#F0F8FF",
+            "panel2": "#FFFFFF",
+            "text": "#333333",
+            "muted": "#455A64",
+            "accent": "#0D47A1",
+            "accent2": "#6A1B9A",
+            "ok": "green",
+            "danger": "red",
+            "warning": "orange",
+            "preview_border": "#CCCCCC",
+        }
+        self.root.configure(bg=self.COLORS["bg"])
+        style = ttk.Style()
+        # En Windows mantiene un look más parecido al anterior. En otros sistemas cae a clam/default.
+        try:
+            if "vista" in style.theme_names():
+                style.theme_use("vista")
+            elif "xpnative" in style.theme_names():
+                style.theme_use("xpnative")
+            else:
+                style.theme_use("clam")
+        except Exception:
+            pass
+
+        style.configure("TFrame", background=self.COLORS["bg"])
+        style.configure("Card.TFrame", background=self.COLORS["bg"], relief="flat")
+        style.configure("TLabel", background=self.COLORS["bg"], foreground=self.COLORS["text"], font=("Arial", 10))
+        style.configure("Muted.TLabel", background=self.COLORS["bg"], foreground=self.COLORS["muted"], font=("Arial", 9))
+        style.configure("Title.TLabel", background=self.COLORS["bg"], foreground=self.COLORS["text"], font=("Arial", 18, "bold"))
+        style.configure("Brand.TLabel", background=self.COLORS["bg"], foreground=self.COLORS["muted"], font=("Arial", 9, "bold"))
+        style.configure("TLabelframe", background=self.COLORS["bg"], foreground=self.COLORS["text"])
+        style.configure("TLabelframe.Label", background=self.COLORS["bg"], foreground=self.COLORS["text"], font=("Arial", 10, "bold"))
+        style.configure("TButton", font=("Arial", 9, "bold"), padding=4)
+        style.configure("Secondary.TButton", font=("Arial", 9, "bold"), padding=4)
+        style.configure("TEntry", fieldbackground="white", foreground="black")
+        style.configure("TCombobox", fieldbackground="white", foreground="black")
+        style.configure("TRadiobutton", background=self.COLORS["bg"], foreground=self.COLORS["text"], font=("Arial", 10))
+        style.configure("TNotebook", background=self.COLORS["bg"])
+        style.configure("TNotebook.Tab", padding=(10, 5), font=("Arial", 9, "bold"))
+
+    # -------------------------
+    # Variables y login
+    # -------------------------
+    def _build_vars(self):
+        self.var_valor_kilo = tk.StringVar()
+        self.var_in_kilo = tk.StringVar()
+        self.var_precio_objetivo = tk.StringVar()
+        self.var_in_objetivo = tk.StringVar()
+        self.var_status = tk.StringVar(value="Listo")
+        self.var_sync = tk.StringVar(value="Nube: sin validar")
+        self.var_com_port = tk.StringVar(value=self.load_config().get("com_port", DEFAULT_COM_PORT))
+        self.var_baudrate = tk.StringVar(value=str(self.load_config().get("baudrate", DEFAULT_BAUDRATE)))
+        self.var_familia = tk.StringVar(value="")
+        self.var_precio = tk.StringVar(value="--")
+        self.var_peso = tk.StringVar(value="-- kg")
+        self.var_codigo = tk.StringVar(value="--")
+        self.var_descripcion = tk.StringVar(value="--")
+        self.var_idx = tk.StringVar(value="--")
+        self.var_fecha = tk.StringVar(value="--")
+        self.var_hora = tk.StringVar(value="--")
+        self.var_in_out = tk.StringVar(value="--")
+        self.var_modo = tk.StringVar(value="--")
+        self.modo_impresion = "--"
+
+    def load_config(self):
+        if not os.path.exists(CONFIG_FILE):
+            return {"com_port": DEFAULT_COM_PORT, "baudrate": DEFAULT_BAUDRATE}
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {"com_port": DEFAULT_COM_PORT, "baudrate": DEFAULT_BAUDRATE}
+
+    def save_config(self):
+        cfg = {"com_port": self.var_com_port.get().strip() or DEFAULT_COM_PORT, "baudrate": int(self.var_baudrate.get().strip() or DEFAULT_BAUDRATE)}
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+    def perform_login(self, api_url, username, password, terminal):
+        self.store.set_setting("api_base_url", api_url)
+        self.store.set_setting("terminal", terminal)
+        self.cloud = CloudClient(api_url)
+        online_error = ""
+        if api_url and self.cloud.available():
+            try:
+                data = self.cloud.login(username, password, terminal, self.device_id)
+                self.current_user = data["user"]
+                self.current_terminal = terminal
+                self.var_sync.set("Nube: conectada")
+                self.store.set_setting("api_token", self.cloud.token)
+                self.store.set_setting("last_login_online", now_str())
+                try:
+                    boot = self.cloud.bootstrap()
+                    self.store.cache_bootstrap(boot)
+                    self.productos_por_familia = self.store.prices_df_by_family()
+                except Exception as exc:
+                    self.var_sync.set(f"Nube: login OK, sync pendiente ({exc})")
+                return True, "Ingreso online correcto"
+            except Exception as exc:
+                online_error = str(exc)
+
+        user = self.store.authenticate_offline(username, password)
+        if user:
+            self.current_user = {k: user.get(k) for k in ["username", "code", "full_name", "role", "active", "permissions"]}
+            self.current_terminal = terminal
+            self.var_sync.set("Nube: offline / usando caché local")
+            return True, "Ingreso offline correcto"
+        return False, "No se pudo ingresar. Error online: " + (online_error or "sin conexión")
+
+    def solicitar_login_inicial(self):
+        while True:
+            dlg = LoginDialog(self.root, self)
+            if dlg.result is None:
+                self.root.destroy()
+                return
+            self.actualizar_header_usuario()
+            self.aplicar_permisos()
+            self.actualizar_idx_label()
+            self.var_status.set(f"Sesión iniciada: {self.current_user.get('username')} / {self.current_terminal}")
+            self.sync_pending_async()
+            return
+
+    def has_permission(self, key):
+        if not self.current_user:
+            return False
+        if self.current_user.get("role") == "admin":
+            return True
+        return bool((self.current_user.get("permissions") or {}).get(key, False))
+
+    def aplicar_permisos(self):
+        self.btn_conectar.config(state="normal" if self.has_permission("connect_scale") else "disabled")
+        self.btn_imprimir.config(state="normal" if self.has_permission("print_labels") else "disabled")
+        try:
+            idx = self.notebook.index(self.frame_precio_objetivo)
+            self.notebook.tab(idx, state="normal" if self.has_permission("use_target_price") else "disabled")
+        except Exception:
+            pass
+
+    def actualizar_header_usuario(self):
+        if self.current_user and self.current_terminal:
+            self.lbl_usuario_actual.config(text=f"{self.current_user.get('code','--')} {self.current_terminal} · {self.current_user.get('full_name','')}")
+        else:
+            self.lbl_usuario_actual.config(text="Usuario: --")
+
+    # -------------------------
+    # UI
+    # -------------------------
+    def crear_interfaz(self):
+        self.outer = tk.Frame(self.root, bg=self.COLORS["bg"])
+        self.outer.pack(fill="both", expand=True)
+        self.main_canvas = tk.Canvas(self.outer, bg=self.COLORS["bg"], highlightthickness=0)
+        self.v_scrollbar = ttk.Scrollbar(self.outer, orient="vertical", command=self.main_canvas.yview)
+        self.main_canvas.configure(yscrollcommand=self.v_scrollbar.set)
+        self.v_scrollbar.pack(side="right", fill="y")
+        self.main_canvas.pack(side="left", fill="both", expand=True)
+        self.frame_principal = tk.Frame(self.main_canvas, bg=self.COLORS["bg"])
+        self.canvas_window = self.main_canvas.create_window((0, 0), window=self.frame_principal, anchor="nw")
+        self.frame_principal.bind("<Configure>", lambda e: self.main_canvas.configure(scrollregion=self.main_canvas.bbox("all")))
+        self.main_canvas.bind("<Configure>", lambda e: self.main_canvas.itemconfigure(self.canvas_window, width=e.width))
+        self.root.bind_all("<MouseWheel>", lambda e: self.main_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"), add="+")
+
+        header = tk.Frame(self.frame_principal, bg=self.COLORS["bg"], padx=10, pady=8)
+        header.pack(fill="x")
+        left = tk.Frame(header, bg=self.COLORS["bg"])
+        left.pack(side="left")
+        ttk.Label(left, text=APP_TITLE, style="Title.TLabel").pack(anchor="w")
+        ttk.Label(left, text=APP_FOOTER, style="Brand.TLabel").pack(anchor="w", pady=(2, 0))
+        self.lbl_usuario_actual = tk.Label(header, text="Usuario: --", bg=self.COLORS["panel"], fg=self.COLORS["text"], font=("Arial", 12, "bold"), padx=18, pady=10)
+        self.lbl_usuario_actual.pack(side="right", padx=8)
+
+        actions = ttk.LabelFrame(self.frame_principal, text="CONTROL TERMINAL / NUBE", padding=12)
+        actions.pack(fill="x", padx=10, pady=(0, 8))
+        ttk.Label(actions, text="Puerto COM:").pack(side="left", padx=(2, 4))
+        self.cmb_com = ttk.Combobox(actions, textvariable=self.var_com_port, values=self.get_available_com_ports(), width=10)
+        self.cmb_com.pack(side="left", padx=3)
+        ttk.Label(actions, text="Baud:").pack(side="left", padx=(10, 4))
+        ttk.Entry(actions, textvariable=self.var_baudrate, width=8).pack(side="left", padx=3)
+        self.btn_conectar = ttk.Button(actions, text="Conectar balanza", command=self.conectar_desconectar_balanza)
+        self.btn_conectar.pack(side="left", padx=5)
+        ttk.Button(actions, text="Actualizar COM", style="Secondary.TButton", command=self.refrescar_puertos_com).pack(side="left", padx=5)
+        ttk.Button(actions, text="Sincronizar nube", style="Secondary.TButton", command=self.manual_sync).pack(side="left", padx=5)
+        ttk.Label(actions, textvariable=self.var_sync, foreground=self.COLORS["ok"]).pack(side="right", padx=8)
+
+        datos = ttk.LabelFrame(self.frame_principal, text="DATOS BALANZA", padding=12)
+        datos.pack(fill="x", padx=10, pady=6)
+        self.lbl_peso_datos = tk.Label(datos, text="Peso: -- kg", bg=self.COLORS["panel"], fg=self.COLORS["accent"], font=("Arial", 11, "bold"), padx=14, pady=6)
+        self.lbl_peso_datos.grid(row=0, column=0, padx=8, sticky="w")
+        self.lbl_fecha = tk.Label(datos, text="Fecha: --", bg=self.COLORS["panel"], fg=self.COLORS["ok"], font=("Arial", 12, "bold"), padx=12)
+        self.lbl_fecha.grid(row=0, column=1, padx=8, sticky="w")
+        self.lbl_hora = tk.Label(datos, text="Hora: --", bg=self.COLORS["panel"], fg="#b9a7ff", font=("Arial", 12, "bold"), padx=12)
+        self.lbl_hora.grid(row=0, column=2, padx=8, sticky="w")
+
+        familia_frame = ttk.LabelFrame(self.frame_principal, text="FAMILIA / HOJA DE PRECIOS", padding=12)
+        familia_frame.pack(fill="x", padx=10, pady=(0, 6))
+        ttk.Label(familia_frame, text="Seleccione la familia antes de calcular o imprimir. Mantiene el estilo por puntos del sistema actual.").grid(row=0, column=0, columnspan=6, sticky="w", pady=(0, 8))
+        families = self.store.get_families() or [{"name": f, "display_name": f.title()} for f in FAMILIAS_DEFAULT]
+        for idx, fam in enumerate(families):
+            ttk.Radiobutton(familia_frame, text=fam["display_name"], value=fam["name"], variable=self.var_familia, command=self.on_family_change).grid(row=1, column=idx, sticky="w", padx=10)
+
+        middle = tk.Frame(self.frame_principal, bg=self.COLORS["bg"])
+        middle.pack(fill="x", padx=10, pady=6)
+        middle.columnconfigure(0, weight=1)
+        inputs = ttk.Frame(middle)
+        inputs.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        self.notebook = ttk.Notebook(inputs)
+        self.notebook.pack(fill="x")
+        self.frame_por_kilo = ttk.Frame(self.notebook)
+        self.frame_precio_objetivo = ttk.Frame(self.notebook)
+        self.notebook.add(self.frame_por_kilo, text="Método por kilo")
+        self.notebook.add(self.frame_precio_objetivo, text="Método precio directo")
+        self.crear_tab_por_kilo()
+        self.crear_tab_precio_objetivo()
+
+        buttons = ttk.LabelFrame(middle, text="ACCIONES", padding=12)
+        buttons.grid(row=0, column=1, sticky="ne")
+        self.btn_calcular = ttk.Button(buttons, text="Calcular", command=self.calcular_desde_tab_activa, width=20)
+        self.btn_calcular.pack(fill="x", pady=5)
+        self.btn_imprimir = ttk.Button(buttons, text="Imprimir XRT 60x40", command=self.calcular_e_imprimir_60x40, width=20)
+        self.btn_imprimir.pack(fill="x", pady=5)
+        ttk.Button(buttons, text="Limpiar", style="Secondary.TButton", command=self.limpiar_salida, width=20).pack(fill="x", pady=5)
+
+        output = ttk.LabelFrame(self.frame_principal, text="OUTPUT / PREVIEW", padding=12)
+        output.pack(fill="both", expand=True, padx=10, pady=6)
+        output.columnconfigure(0, weight=1)
+        left_out = tk.Frame(output, bg=self.COLORS["panel"])
+        left_out.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        right_out = tk.Frame(output, bg=self.COLORS["panel"])
+        right_out.grid(row=0, column=1, sticky="ne")
+        self.add_output_row(left_out, 0, "Modo", self.var_modo, self.COLORS["accent2"])
+        self.add_output_row(left_out, 1, "Precio", self.var_precio, self.COLORS["danger"], big=True)
+        self.add_output_row(left_out, 2, "Peso", self.var_peso, "blue")
+        self.add_output_row(left_out, 3, "Código", self.var_codigo, self.COLORS["warning"])
+        self.add_output_row(left_out, 4, "Descripción", self.var_descripcion, self.COLORS["text"], wrap=520)
+        self.add_output_row(left_out, 5, "IDX", self.var_idx, self.COLORS["text"])
+        self.add_output_row(left_out, 6, "IN", self.var_in_out, self.COLORS["text"], wrap=520)
+        tk.Label(right_out, text="Vista previa etiqueta 60x40", bg=self.COLORS["panel"], fg=self.COLORS["text"], font=("Arial", 10, "bold")).pack(anchor="w", pady=(0, 4))
+        self.canvas_preview = tk.Canvas(right_out, width=430, height=260, bg="#f8fafc", highlightthickness=1, highlightbackground=self.COLORS["preview_border"])
+        self.canvas_preview.pack()
+
+        status = tk.Label(self.frame_principal, textvariable=self.var_status, bg=self.COLORS["bg"], fg=self.COLORS["accent"], font=("Arial", 10, "bold"), anchor="w")
+        status.pack(fill="x", padx=10, pady=(2, 10))
+
+    def add_output_row(self, parent, row, label, var, fg, big=False, wrap=None):
+        tk.Label(parent, text=label + ":", bg=self.COLORS["panel"], fg=self.COLORS["muted"], font=("Arial", 10, "bold"), width=14, anchor="w").grid(row=row, column=0, sticky="w", pady=4, padx=8)
+        tk.Label(parent, textvariable=var, bg=self.COLORS["panel"], fg=fg, font=("Arial", 11 if big else 10, "bold"), wraplength=wrap or 0, anchor="w").grid(row=row, column=1, sticky="w", pady=4, padx=8)
+
+    def crear_tab_por_kilo(self):
+        frame = ttk.LabelFrame(self.frame_por_kilo, text="Cálculo por valor kilo", padding=12)
+        frame.pack(fill="x", padx=8, pady=8)
+        ttk.Label(frame, text="Valor kilo:").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        ttk.Entry(frame, textvariable=self.var_valor_kilo, width=22).grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        ttk.Label(frame, text="IN / producción:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        ttk.Entry(frame, textvariable=self.var_in_kilo, width=42).grid(row=1, column=1, sticky="w", padx=5, pady=5)
+        ttk.Label(frame, text="Usa peso de balanza y busca el precio más cercano en la familia.").grid(row=2, column=0, columnspan=2, sticky="w", padx=5, pady=5)
+
+    def crear_tab_precio_objetivo(self):
+        frame = ttk.LabelFrame(self.frame_precio_objetivo, text="Cálculo por precio directo", padding=12)
+        frame.pack(fill="x", padx=8, pady=8)
+        ttk.Label(frame, text="Precio deseado:").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        ttk.Entry(frame, textvariable=self.var_precio_objetivo, width=22).grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        ttk.Label(frame, text="IN / producción:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        ttk.Entry(frame, textvariable=self.var_in_objetivo, width=42).grid(row=1, column=1, sticky="w", padx=5, pady=5)
+        ttk.Label(frame, text="Busca el precio más similar hacia arriba y calcula IDX según peso.").grid(row=2, column=0, columnspan=2, sticky="w", padx=5, pady=5)
+
+    # -------------------------
+    # Sync
+    # -------------------------
+    def manual_sync(self):
+        self.productos_por_familia = self.store.prices_df_by_family()
+        self.sync_pending_async()
+        self.var_status.set("Sincronización solicitada")
+
+    def sync_pending_async(self):
+        threading.Thread(target=self.sync_pending, daemon=True).start()
+
+    def sync_pending(self):
+        try:
+            if not self.cloud.token:
+                token = self.store.get_setting("api_token", "")
+                if token:
+                    self.cloud.token = token
+            if not self.cloud.available() or not self.cloud.token:
+                return
+            items = self.store.pending_production(200)
+            if not items:
+                self.var_sync.set("Nube: al día")
+                return
+            resp = self.cloud.sync_production(items)
+            # Si el servidor omitió algunos por duplicados, igual marcamos todos los enviados como sincronizados.
+            self.store.mark_synced([x["local_uuid"] for x in items])
+            self.var_sync.set(f"Nube: sync OK ({resp.get('inserted',0)} nuevos)")
+        except Exception as exc:
+            self.var_sync.set("Nube: pendiente")
+            print(f"Sync pendiente: {exc}")
+
+    # -------------------------
+    # Balanza / COM
+    # -------------------------
+    def get_available_com_ports(self):
+        if serial is None:
+            return [self.var_com_port.get().strip() or DEFAULT_COM_PORT]
+        try:
+            ports = [p.device for p in serial.tools.list_ports.comports()]
+            return ports or [self.var_com_port.get().strip() or DEFAULT_COM_PORT]
+        except Exception:
+            return [self.var_com_port.get().strip() or DEFAULT_COM_PORT]
+
+    def refrescar_puertos_com(self):
+        ports = self.get_available_com_ports()
+        self.cmb_com["values"] = ports
+        if self.var_com_port.get().strip() not in ports and ports:
+            self.var_com_port.set(ports[0])
+        self.save_config()
+        self.var_status.set("Puertos COM actualizados")
+
+    def conectar_desconectar_balanza(self):
+        if not self.has_permission("connect_scale"):
+            messagebox.showerror("Sin permiso", "Este usuario no puede conectar la balanza.")
+            return
+        if self.balanza_conectada:
+            self.desconectar_balanza()
+            self.btn_conectar.config(text="Conectar balanza")
+            self.var_status.set("Balanza desconectada")
+        else:
+            if self.conectar_balanza():
+                self.btn_conectar.config(text="Desconectar balanza")
+                self.var_status.set("Balanza conectada")
+
+    def conectar_balanza(self):
+        puerto = self.var_com_port.get().strip() or DEFAULT_COM_PORT
+        try:
+            baudrate = int(self.var_baudrate.get().strip() or DEFAULT_BAUDRATE)
+        except Exception:
+            messagebox.showerror("Error", "Baudrate inválido.")
+            return False
+        self.save_config()
+        self.stop_event = threading.Event()
+        self.balanza = conectar_balanza(puerto, baudrate)
+        if self.balanza:
+            self.balanza_conectada = True
+            self.hilo_lectura = threading.Thread(target=leer_pesos, args=(self.balanza, self.data_queue, self.stop_event), daemon=True)
+            self.hilo_lectura.start()
+            return True
+        messagebox.showerror("Error", f"No se pudo conectar la balanza en {puerto}.")
+        return False
+
+    def desconectar_balanza(self):
+        self.stop_event.set()
+        self.balanza_conectada = False
+        if self.hilo_lectura and self.hilo_lectura.is_alive():
+            try:
+                self.hilo_lectura.join(timeout=1.0)
+            except Exception:
+                pass
+        if self.balanza and getattr(self.balanza, "is_open", False):
+            try:
+                self.balanza.close()
+            except Exception:
+                pass
+        self.balanza = None
+
+    def actualizar_etiquetas(self):
+        try:
+            ultimo = None
+            while not self.data_queue.empty():
+                ultimo = self.data_queue.get_nowait()
+            if ultimo is not None:
+                peso, fecha, hora = ultimo
+                self.lbl_peso_datos.config(text=f"Peso: {peso:.3f} kg")
+                self.lbl_fecha.config(text=f"Fecha: {fecha}")
+                self.lbl_hora.config(text=f"Hora: {hora}")
+                self.var_fecha.set(fecha)
+                self.var_hora.set(hora)
+                self.var_status.set(f"Peso leído correctamente: {peso:.3f} kg")
+        except queue.Empty:
+            pass
+        self.root.after(100, self.actualizar_etiquetas)
+
+    # -------------------------
+    # Cálculos
+    # -------------------------
+    def limpiar_precio(self, precio):
+        return "".join(c for c in str(precio) if c in set(string.digits + "."))
+
+    def on_family_change(self):
+        fam = self.var_familia.get().strip()
+        if fam:
+            self.var_status.set(f"Familia seleccionada: {fam}")
+
+    def validar_familia_seleccionada(self, para_imprimir=False):
+        fam = self.var_familia.get().strip().lower()
+        if fam:
+            return fam
+        messagebox.showerror("Familia requerida", "Debe seleccionar una familia antes de calcular o imprimir.")
+        return None
+
+    def obtener_df_familia(self, familia=None):
+        familia = (familia or self.var_familia.get()).strip().lower()
+        if pd is None:
+            return None
+        return self.productos_por_familia.get(familia, pd.DataFrame(columns=["Código Producto", "Descripción", "Precio Venta Bruto"]))
+
+    def encontrar_producto_cercano(self, valor_prenda, familia):
+        df = self.obtener_df_familia(familia)
+        if df is None or df.empty:
+            return None
+        df = df.copy()
+        df["Diferencia"] = (df["Precio Venta Bruto"].astype(float) - float(valor_prenda)).abs()
+        row = df.loc[df["Diferencia"].idxmin()]
+        return {"precio_real": float(row["Precio Venta Bruto"]), "codigo_producto": str(row["Código Producto"]), "descripcion": str(row["Descripción"])}
+
+    def encontrar_producto_hacia_arriba(self, valor_objetivo, familia):
+        df = self.obtener_df_familia(familia)
+        if df is None or df.empty:
+            return None
+        df = df.copy()
+        superiores = df[df["Precio Venta Bruto"].astype(float) >= float(valor_objetivo)].copy()
+        if superiores.empty:
+            row = df.loc[df["Precio Venta Bruto"].astype(float).idxmax()]
+        else:
+            superiores["Diferencia"] = superiores["Precio Venta Bruto"].astype(float) - float(valor_objetivo)
+            row = superiores.loc[superiores["Diferencia"].idxmin()]
+        return {"precio_real": float(row["Precio Venta Bruto"]), "codigo_producto": str(row["Código Producto"]), "descripcion": str(row["Descripción"])}
+
+    def obtener_peso_actual(self):
+        try:
+            return float(re.search(r"[-+]?\d*\.\d+|\d+", self.lbl_peso_datos.cget("text")).group())
+        except Exception:
+            return None
+
+    def calcular_desde_tab_activa(self):
+        tab = self.notebook.select()
+        if tab == str(self.frame_por_kilo):
+            return self.calcular_por_kilo()
+        return self.calcular_por_precio_objetivo()
+
+    def calcular_por_kilo(self):
+        familia = self.validar_familia_seleccionada()
+        if not familia:
+            return False
+        try:
+            valor_kilo = float(self.var_valor_kilo.get().strip())
+        except Exception:
+            messagebox.showerror("Entrada inválida", "El valor kilo debe ser numérico.")
+            return False
+        peso_kg = self.obtener_peso_actual()
+        if peso_kg is None or peso_kg <= 0:
+            messagebox.showerror("Peso inválido", "No hay un peso estable disponible.")
+            return False
+        producto = self.encontrar_producto_cercano(valor_kilo * peso_kg, familia)
+        if not producto:
+            messagebox.showerror("Error", f"No hay precios cargados para {familia}. Sincroniza la nube o carga prices.xlsx.")
+            return False
+        self.idx_value = valor_kilo / 1000.0
+        self.actualizar_salida(producto["precio_real"], peso_kg, producto["codigo_producto"], producto["descripcion"], self.var_in_kilo.get().strip(), "MODO: cálculo por kilo", "KL")
+        return True
+
+    def calcular_por_precio_objetivo(self):
+        if not self.has_permission("use_target_price"):
+            messagebox.showerror("Sin permiso", "Este usuario no puede usar precio objetivo.")
+            return False
+        familia = self.validar_familia_seleccionada()
+        if not familia:
+            return False
+        try:
+            precio_objetivo = float(self.var_precio_objetivo.get().strip())
+        except Exception:
+            messagebox.showerror("Entrada inválida", "El precio directo debe ser numérico.")
+            return False
+        peso_kg = self.obtener_peso_actual()
+        if peso_kg is None or peso_kg <= 0:
+            messagebox.showerror("Peso inválido", "No hay un peso estable disponible.")
+            return False
+        producto = self.encontrar_producto_hacia_arriba(precio_objetivo, familia)
+        if not producto:
+            messagebox.showerror("Error", f"No hay precios cargados para {familia}.")
+            return False
+        self.idx_value = (producto["precio_real"] / peso_kg) / 1000.0
+        self.actualizar_salida(producto["precio_real"], peso_kg, producto["codigo_producto"], producto["descripcion"], self.var_in_objetivo.get().strip(), "MODO: cálculo por precio directo", "PR")
+        return True
+
+    def actualizar_salida(self, precio_real, peso_kg, codigo_producto, descripcion, in_value, modo_label, modo_impresion):
+        self.var_precio.set(format_clp(precio_real))
+        self.var_peso.set(f"{peso_kg:.3f} kg")
+        self.var_codigo.set(str(codigo_producto))
+        self.var_descripcion.set(descripcion if descripcion else "--")
+        self.var_modo.set(modo_label)
+        self.modo_impresion = modo_impresion
+        self.var_in_out.set(in_value if in_value else "--")
+        self.actualizar_idx_label()
+        self.generar_codigo_barra(codigo_producto)
+        self.actualizar_preview_etiqueta()
+        self.var_status.set("Cálculo realizado")
+
+    def actualizar_idx_label(self):
+        idx_str = f"{self.idx_value:.2f}"
+        if self.current_user and self.current_terminal:
+            self.var_idx.set(f"{idx_str}  {self.current_user.get('code','--')} {self.current_terminal}")
+        else:
+            self.var_idx.set(idx_str)
+
+    def limpiar_salida(self):
+        self.var_precio.set("--")
+        self.var_peso.set("-- kg")
+        self.var_codigo.set("--")
+        self.var_descripcion.set("--")
+        self.var_idx.set("--")
+        self.var_in_out.set("--")
+        self.var_modo.set("--")
+        self.modo_impresion = "--"
+        self.canvas_preview.delete("all")
+        self.barcode_pil_image = None
+        self.preview_label_tk = None
+        self.last_label_image = None
+        self.var_status.set("Salida limpiada")
+
+    # -------------------------
+    # Barcode / etiqueta
+    # -------------------------
+    def sanitize_code39(self, code):
+        codigo = str(code).strip().upper().replace(" ", "-")
+        allowed = set("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-. $/+%")
+        return "".join(c if c in allowed else "-" for c in codigo)
+
+    def generar_codigo_barra(self, codigo_producto):
+        if Code39 is None or Image is None:
+            self.barcode_pil_image = None
+            return
+        try:
+            codigo = self.sanitize_code39(codigo_producto)
+            barcode_obj = Code39(codigo, writer=ImageWriter(), add_checksum=False)
+            buffer = io.BytesIO()
+            barcode_obj.write(buffer, {"write_text": False, "dpi": 203, "module_width": 0.33, "module_height": 11.0, "quiet_zone": 6.0})
+            buffer.seek(0)
+            img = Image.open(buffer).convert("L")
+            self.barcode_pil_image = img.point(lambda p: 0 if p < 128 else 255, mode="1").copy()
+        except Exception as e:
+            print(f"Error al generar barras: {e}")
+            self.barcode_pil_image = None
+
+    def _label_px(self):
+        dpi = 203
+        return int((60 / 25.4) * dpi), int((40 / 25.4) * dpi)
+
+    def _try_font(self, names, size):
+        for name in names:
+            try:
+                return ImageFont.truetype(name, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    def _best_fit_font(self, draw, text, font_names, max_w, max_h, start=78, end=18):
+        for sz in range(start, end - 1, -1):
+            f = self._try_font(font_names, sz)
+            bb = draw.textbbox((0, 0), text, font=f)
+            if (bb[2] - bb[0]) <= max_w and (bb[3] - bb[1]) <= max_h:
+                return f
+        return self._try_font(font_names, end)
+
+    def truncate_text(self, draw, text, font, max_w):
+        text = str(text).strip()
+        if not text:
+            return ""
+        if draw.textbbox((0, 0), text, font=font)[2] <= max_w:
+            return text
+        ellipsis = "..."
+        while text:
+            candidate = text + ellipsis
+            if draw.textbbox((0, 0), candidate, font=font)[2] <= max_w:
+                return candidate
+            text = text[:-1].rstrip()
+        return ellipsis
+
+    def generar_imagen_output_60x40(self):
+        if Image is None:
+            return None
+        try:
+            w_px, h_px = self._label_px()
+            image = Image.new("RGB", (w_px, h_px), "white")
+            draw = ImageDraw.Draw(image)
+            margin_x, margin_y = 8, 6
+            top_price_h, barcode_h, footer_h = 84, 86, 118
+            precio_str = self.var_precio.get().replace("$", "").strip()
+            peso_str = self.var_peso.get().strip()
+            codigo_producto = self.var_codigo.get().strip()
+            descripcion = self.var_descripcion.get().strip()
+            fecha, hora = self.var_fecha.get().strip(), self.var_hora.get().strip()
+            in_value = self.var_in_out.get().strip()
+            modo = (self.modo_impresion or "--").strip()
+            if precio_str in ("--", "") or peso_str.startswith("--") or codigo_producto in ("--", ""):
+                raise ValueError("Información insuficiente")
+            price_font = self._best_fit_font(draw, f"${precio_str}", ["arialbd.ttf", "arial.ttf"], w_px - 2 * margin_x, top_price_h - 4)
+            info_font = self._try_font(["arialbd.ttf", "arial.ttf"], 16)
+            small_font = self._try_font(["arial.ttf", "arialbd.ttf"], 13)
+            tiny_font = self._try_font(["arial.ttf", "arialbd.ttf"], 11)
+            price_text = f"${precio_str}"
+            bb = draw.textbbox((0, 0), price_text, font=price_font)
+            draw.text(((w_px - (bb[2] - bb[0])) // 2, margin_y + (top_price_h - (bb[3] - bb[1])) // 2), price_text, fill="black", font=price_font)
+            barcode_y0 = margin_y + top_price_h + 2
+            if self.barcode_pil_image:
+                b = self.barcode_pil_image.convert("1")
+                bw, bh = b.size
+                scale = min((w_px - 2 * margin_x) / bw, barcode_h / bh)
+                nw, nh = max(1, int(bw * scale)), max(1, int(bh * scale))
+                bc = b.resize((nw, nh), Image.NEAREST)
+                image.paste(bc.convert("RGB"), ((w_px - nw) // 2, barcode_y0 + (barcode_h - nh) // 2))
+            footer_y = h_px - footer_h
+            right_x = w_px // 2
+            draw.text((margin_x, footer_y), f"Cod: {codigo_producto}", fill="black", font=info_font)
+            draw.text((margin_x, footer_y + 20), f"Peso: {peso_str}", fill="black", font=info_font)
+            draw.text((right_x, footer_y + 20), f"Fecha: {fecha}", fill="black", font=info_font)
+            idx_line = f"IDX: {self.idx_value:.2f}"
+            if self.current_user and self.current_terminal:
+                idx_line += f"  {self.current_user.get('code','--')} {self.current_terminal}"
+            draw.text((margin_x, footer_y + 40), idx_line, fill="black", font=small_font)
+            draw.text((right_x, footer_y + 40), f"Hora: {hora}", fill="black", font=small_font)
+            max_w = w_px - 2 * margin_x
+            draw.text((margin_x, footer_y + 60), self.truncate_text(draw, f"IN: {in_value if in_value else '--'}", small_font, max_w), fill="black", font=small_font)
+            draw.text((margin_x, footer_y + 76), self.truncate_text(draw, f"DS: {descripcion if descripcion else '--'}", small_font, max_w), fill="black", font=small_font)
+            draw.text((margin_x, h_px - 14), modo, fill="black", font=tiny_font)
+            return image
+        except Exception as e:
+            print(f"Error al generar imagen etiqueta: {e}")
+            return None
+
+    def actualizar_preview_etiqueta(self):
+        if ImageTk is None:
+            return
+        img = self.generar_imagen_output_60x40()
+        self.last_label_image = img
+        self.canvas_preview.delete("all")
+        if img is None:
+            self.canvas_preview.create_text(215, 130, text="Sin vista previa", fill="black", font=("Arial", 12))
+            return
+        preview = img.copy()
+        target_w, target_h = 410, 240
+        scale = min(target_w / preview.width, target_h / preview.height)
+        nw, nh = max(1, int(preview.width * scale)), max(1, int(preview.height * scale))
+        preview = preview.resize((nw, nh), Image.NEAREST)
+        bg = Image.new("RGB", (target_w, target_h), "white")
+        bg.paste(preview, ((target_w - nw) // 2, (target_h - nh) // 2))
+        self.preview_label_tk = ImageTk.PhotoImage(bg)
+        self.canvas_preview.create_image(10, 10, anchor="nw", image=self.preview_label_tk)
+
+    # -------------------------
+    # Impresión
+    # -------------------------
+    def get_xprinter_printer(self):
+        if win32print is None:
+            return None
+        try:
+            printers = win32print.EnumPrinters(win32print.PRINTER_ENUM_CONNECTIONS | win32print.PRINTER_ENUM_LOCAL)
+            xprinter = [p[2] for p in printers if "XPRINTER" in p[2].upper()]
+            return xprinter[0] if xprinter else None
+        except Exception:
+            return None
+
+    def calcular_e_imprimir_60x40(self):
+        if not self.has_permission("print_labels"):
+            messagebox.showerror("Sin permiso", "Este usuario no puede imprimir etiquetas.")
+            return
+        if not self.validar_familia_seleccionada(True):
+            return
+        if self.calcular_desde_tab_activa():
+            self.imprimir_xrt_60x40()
+
+    def imprimir_xrt_60x40(self):
+        try:
+            printer_name = self.get_xprinter_printer()
+            if not printer_name:
+                messagebox.showerror("Impresora", "No se encontró una impresora XPRINTER instalada/conectada.")
+                return
+            label_image = self.last_label_image or self.generar_imagen_output_60x40()
+            if label_image is None:
+                messagebox.showerror("Error", "No se pudo generar la etiqueta.")
+                return
+            self.enviar_imagen_a_impresora_custom(printer_name, label_image, 60, 40)
+            self.append_print_history()
+            self.var_status.set(f"Etiqueta enviada a {printer_name}")
+        except Exception as e:
+            messagebox.showerror("Error de impresión", str(e))
+
+    def enviar_imagen_a_impresora_custom(self, printer_name, image, width_mm, height_mm):
+        if win32print is None or ImageWin is None:
+            raise RuntimeError("pywin32/PIL ImageWin no disponible. Instalar pywin32 y pillow en Windows.")
+        image = image.convert("RGB")
+        hPrinter = win32print.OpenPrinter(printer_name)
+        try:
+            properties = win32print.GetPrinter(hPrinter, 2)
+            devmode = properties["pDevMode"]
+            devmode.FormName = f"Etiqueta{width_mm}x{height_mm}"
+            devmode.PaperSize = 256
+            devmode.PaperWidth = int(width_mm * 10)
+            devmode.PaperLength = int(height_mm * 10)
+            devmode.Orientation = win32con.DMORIENT_PORTRAIT
+            devmode.Fields |= win32con.DM_FORMNAME | win32con.DM_PAPERSIZE | win32con.DM_PAPERWIDTH | win32con.DM_PAPERLENGTH | win32con.DM_ORIENTATION
+            hDC_handle = win32gui.CreateDC("WINSPOOL", printer_name, None)
+            win32gui.ResetDC(hDC_handle, devmode)
+            hDC = win32ui.CreateDCFromHandle(hDC_handle)
+            hDC.StartDoc("Etiqueta LAMERICANA")
+            hDC.StartPage()
+            dib = ImageWin.Dib(image)
+            dib.draw(hDC.GetHandleOutput(), (0, 0, image.width, image.height))
+            hDC.EndPage()
+            hDC.EndDoc()
+            hDC.DeleteDC()
+        finally:
+            win32print.ClosePrinter(hPrinter)
+
+    def append_print_history(self):
+        price_int = clp_to_int(self.var_precio.get())
+        peso_kg = parse_weight(self.var_peso.get())
+        row = {
+            "local_uuid": str(uuid.uuid4()),
+            "timestamp": now_str(),
+            "usuario": self.current_user.get("username", "") if self.current_user else "",
+            "codigo_usuario": self.current_user.get("code", "") if self.current_user else "",
+            "terminal": self.current_terminal or "",
+            "familia": self.var_familia.get().strip().lower(),
+            "modo": self.var_modo.get(),
+            "modo_impresion": self.modo_impresion,
+            "precio_int": price_int,
+            "peso_kg": peso_kg,
+            "codigo_producto": self.var_codigo.get(),
+            "descripcion": self.var_descripcion.get(),
+            "idx": self.var_idx.get(),
+            "in_desc": self.var_in_out.get(),
+            "fecha_balanza": self.var_fecha.get(),
+            "hora_balanza": self.var_hora.get(),
+        }
+        self.store.save_production(row, synced=0)
+        self.sync_pending_async()
+
+
+def main():
+    root = tk.Tk()
+    BalanzaApp(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()

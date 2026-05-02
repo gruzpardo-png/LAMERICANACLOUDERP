@@ -1,26 +1,60 @@
 {% extends "base.html" %}
-{% block header %}Configuración{% endblock %}
+{% block header %}Consulta producción{% endblock %}
 {% block content %}
+<form class="panel filters" method="get">
+  <div class="field"><label>Desde</label><input type="date" name="start" value="{{ request.args.get('start','') }}"></div>
+  <div class="field"><label>Hasta</label><input type="date" name="end" value="{{ request.args.get('end','') }}"></div>
+  <div class="field"><label>Familia</label><select name="familia"><option value="">Todas</option>{% for f in families %}<option value="{{ f.name }}" {% if request.args.get('familia')==f.name %}selected{% endif %}>{{ f.display_name }}</option>{% endfor %}</select></div>
+  <div class="field"><label>IN</label><input name="in" value="{{ request.args.get('in','') }}" placeholder="Buscar producción"></div>
+  <button class="btn">Filtrar</button>
+  <a class="btn secondary" href="{{ url_for('production_view') }}">Limpiar</a>
+</form>
+
 <section class="panel">
-  <form method="post" class="grid">
-    <div class="row">
-      <div class="field"><label>Nombre marca</label><input name="brand_name" value="{{ settings.get('brand_name','La Americana') }}"></div>
-      <div class="field"><label>Branding inferior</label><input name="footer_brand" value="{{ settings.get('footer_brand','RUZ Technology company') }}"></div>
+  <h2>Importar / exportar datos</h2>
+  <div class="row">
+    <div>
+      <h3 class="section-title">Importar datos anteriores</h3>
+      <form class="filters" method="post" action="{{ url_for('production_import_csv') }}" enctype="multipart/form-data">
+        <input type="file" name="file" accept=".csv,.xlsx,.xls" class="input" style="max-width:460px" required>
+        <button class="btn secondary">Importar datos</button>
+      </form>
+      <p class="muted">Acepta el historial antiguo <strong>historial_etiquetas.csv</strong> y también archivos Excel exportados desde esta plataforma. El sistema evita duplicados por UUID/hash.</p>
     </div>
-    <div class="row">
-      <div class="field"><label>Horas válidas de caché local</label><input name="sync_valid_hours" type="number" value="{{ settings.get('sync_valid_hours','24') }}"></div>
-      <div class="field"><label>Familias que cuentan 2 etiquetas = 1 unidad</label><input name="shoe_family_names" value="{{ settings.get('shoe_family_names','zapatillas,zapatos,calzado') }}"></div>
+    <div>
+      <h3 class="section-title">Exportar datos filtrados</h3>
+      <div class="filters">
+        <a class="btn" href="{{ url_for('production_export_xlsx', **request.args) }}">Exportar Excel</a>
+        <a class="btn secondary" href="{{ url_for('production_export_csv', **request.args) }}">Exportar CSV</a>
+      </div>
+      <p class="muted">La exportación respeta los filtros aplicados arriba: fecha, familia e IN.</p>
     </div>
-    <div class="section-title">Integraciones futuras</div>
-    <div class="row">
-      <div class="field"><label>WhatsApp</label><input name="whatsapp_number" value="{{ settings.get('whatsapp_number','') }}"></div>
-      <div class="field"><label>Jumpseller URL</label><input name="jumpseller_url" value="{{ settings.get('jumpseller_url','') }}"></div>
-    </div>
-    <div class="row">
-      <div class="field"><label>Instagram URL</label><input name="instagram_url" value="{{ settings.get('instagram_url','') }}"></div>
-      <div class="field"><label>Facebook URL</label><input name="facebook_url" value="{{ settings.get('facebook_url','') }}"></div>
-    </div>
-    <button class="btn" style="max-width:240px">Guardar configuración</button>
-  </form>
+  </div>
 </section>
+
+<section class="panel">
+  <h2>Datos consolidados</h2>
+  <input class="input" id="quickFilter" placeholder="Filtro rápido tipo Excel..." style="margin-bottom:12px">
+  <div class="table-wrap">
+    <table id="dataTable">
+      <thead>
+        <tr>
+          <th>Fecha</th><th>Usuario</th><th>Terminal</th><th>Familia</th><th>Modo</th><th>Precio</th><th>Peso</th><th>Código</th><th>Descripción</th><th>IDX</th><th>IN</th><th>Fecha balanza</th><th>Hora</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td><td>{{ r.usuario }}</td><td>{{ r.terminal }}</td><td>{{ r.familia }}</td><td>{{ r.modo_impresion }}</td><td>{{ r.precio_int|clp }}</td><td>{{ r.peso_kg|kg }}</td><td>{{ r.codigo_producto }}</td><td>{{ r.descripcion }}</td><td>{{ r.idx }}</td><td>{{ r.in_desc }}</td><td>{{ r.fecha_balanza }}</td><td>{{ r.hora_balanza }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+<script>
+const f=document.getElementById('quickFilter');
+const rows=[...document.querySelectorAll('#dataTable tbody tr')];
+f?.addEventListener('input',()=>{const q=f.value.toLowerCase();rows.forEach(r=>{r.style.display=r.innerText.toLowerCase().includes(q)?'':'none'})});
+</script>
 {% endblock %}
