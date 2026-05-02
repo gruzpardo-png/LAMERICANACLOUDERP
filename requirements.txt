@@ -1,3 +1,8 @@
 {% extends "base.html" %}
-{% block header %}No encontrado{% endblock %}
-{% block content %}<section class="panel"><h2>Ruta no encontrada</h2><p class="muted">La página solicitada no existe.</p></section>{% endblock %}
+Flask==3.1.1
+Flask-SQLAlchemy==3.1.1
+gunicorn==23.0.0
+psycopg2-binary==2.9.10
+pandas==2.2.3
+openpyxl==3.1.5
+Werkzeug==3.1.3
