@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block header %}Usuarios y accesos{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>Crear / modificar usuario</h2>
+  <form method="post" class="grid">
+    <div class="row3">
+      <div class="field"><label>Usuario</label><input name="username" placeholder="ej: kd"></div>
+      <div class="field"><label>Nombre</label><input name="full_name" placeholder="Nombre completo"></div>
+      <div class="field"><label>Código etiqueta</label><input name="code" placeholder="KD"></div>
+    </div>
+    <div class="row3">
+      <div class="field"><label>Nueva clave</label><input name="password" type="password" placeholder="Dejar vacío para no cambiar"></div>
+      <div class="field"><label>Rol</label><select name="role"><option value="operator">Operador</option><option value="supervisor">Supervisor</option><option value="admin">Admin</option><option value="auditor">Auditor</option></select></div>
+      <div class="field"><label>Estado</label><label class="checkline"><input type="checkbox" name="active" checked> Activo</label></div>
+    </div>
+    <div class="checkbox-grid">
+      {% for key in permissions.keys() %}<label class="checkline"><input type="checkbox" name="{{ key }}" checked> {{ key }}</label>{% endfor %}
+    </div>
+    <button class="btn" style="max-width:220px">Guardar usuario</button>
+  </form>
+</section>
+<section class="panel"><h2>Usuarios registrados</h2><div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Código</th><th>Nombre</th><th>Rol</th><th>Activo</th><th>Permisos</th><th>Acción</th></tr></thead><tbody>{% for u in users %}<tr><td>{{ u.username }}</td><td>{{ u.code }}</td><td>{{ u.full_name }}</td><td><span class="badge">{{ u.role }}</span></td><td>{{ 'Sí' if u.active else 'No' }}</td><td>{{ u.permissions }}</td><td><form method="post" action="{{ url_for('user_delete', user_id=u.id) }}"><button class="btn danger">Desactivar</button></form></td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}
