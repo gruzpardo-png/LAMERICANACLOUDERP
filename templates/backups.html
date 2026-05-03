@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block header %}Respaldos de base de datos{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>Respaldo seguro de La Americana Cloud</h2>
+  <p class="muted">Descarga una copia lógica de usuarios, permisos, familias, precios, producción, configuración y auditoría reciente.</p>
+  <div class="cards">
+    {% for k, v in counts.items() %}
+    <div class="card"><span>{{ k }}</span><strong>{{ v }}</strong></div>
+    {% endfor %}
+  </div>
+  <div class="filters" style="margin-top:18px">
+    <a class="btn" href="{{ url_for('backup_download_zip') }}">Descargar respaldo completo ZIP</a>
+    <a class="btn secondary" href="{{ url_for('backup_download_json') }}">Descargar JSON técnico</a>
+  </div>
+  <p class="muted" style="margin-top:14px">Recomendación: descarga un respaldo antes de subir cambios grandes a GitHub o antes de modificar masivamente precios. Guarda el ZIP en Drive/Dropbox o en un disco externo.</p>
+</section>
+
+<section class="panel warning-box">
+  <h2>Restaurar respaldo</h2>
+  <p>Permite subir un respaldo <strong>.zip</strong> o <strong>.json</strong> generado por este mismo sistema. Por seguridad, la producción se fusiona por <code>local_uuid</code> y no se borra salvo que lo marques expresamente.</p>
+  <form method="post" action="{{ url_for('backup_restore_upload') }}" enctype="multipart/form-data" class="grid" style="gap:14px">
+    <div class="field">
+      <label>Archivo de respaldo</label>
+      <input type="file" name="backup_file" accept=".zip,.json,application/json,application/zip" required>
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label>Modo de restauración</label>
+        <select name="restore_mode">
+          <option value="merge">Seguro: agregar/actualizar sin borrar tablas</option>
+          <option value="replace_masters">Avanzado: reemplazar tablas maestras seleccionadas</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Confirmación obligatoria</label>
+        <input type="text" name="confirm_restore" placeholder="Escribe RESTAURAR" required>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:0;background:rgba(255,255,255,.04)">
+      <h3 class="section-title">Secciones a restaurar</h3>
+      <div class="checkbox-grid">
+        <label class="checkline"><input type="checkbox" name="restore_users" checked> Usuarios, roles y permisos</label>
+        <label class="checkline"><input type="checkbox" name="restore_families" checked> Familias</label>
+        <label class="checkline"><input type="checkbox" name="restore_prices" checked> Precios</label>
+        <label class="checkline"><input type="checkbox" name="restore_production" checked> Producción / etiquetas</label>
+        <label class="checkline"><input type="checkbox" name="restore_settings" checked> Configuración</label>
+      </div>
+    </div>
+
+    <details class="panel" style="margin-top:0;background:rgba(255,85,114,.06);border-color:rgba(255,85,114,.22)">
+      <summary><strong>Opción peligrosa: borrar producción actual y reemplazarla</strong></summary>
+      <p class="muted">No uses esta opción salvo recuperación total. Lo normal es dejarla desmarcada para agregar solo los registros faltantes.</p>
+      <label class="checkline"><input type="checkbox" name="wipe_production"> Borrar toda la producción actual antes de importar producción del respaldo</label>
+      <div class="field" style="margin-top:10px">
+        <label>Confirmación adicional para borrar producción</label>
+        <input type="text" name="confirm_wipe_production" placeholder="Solo si marcas la opción: BORRAR PRODUCCION">
+      </div>
+    </details>
+
+    <div class="actions-inline">
+      <button class="btn danger" type="submit">Subir y restaurar respaldo</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Últimos movimientos</h2>
+  <div class="row">
+    <div>
+      <h3 class="section-title">Último respaldo descargado</h3>
+      {% if last_backup %}
+        <p><strong>{{ last_backup.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</strong> por {{ last_backup.actor }} · {{ last_backup.detail }}</p>
+      {% else %}
+        <p class="muted">Todavía no hay respaldos descargados desde este panel.</p>
+      {% endif %}
+    </div>
+    <div>
+      <h3 class="section-title">Última restauración</h3>
+      {% if last_restore %}
+        <p><strong>{{ last_restore.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</strong> por {{ last_restore.actor }} · {{ last_restore.detail[:240] }}...</p>
+      {% else %}
+        <p class="muted">Todavía no hay restauraciones registradas.</p>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<section class="panel warning-box">
+  <h2>Regla para no perder datos al actualizar</h2>
+  <p>Las actualizaciones de software deben reemplazar código, plantillas y archivos estáticos, pero no deben cambiar la variable <strong>DATABASE_URL</strong> ni eliminar la base PostgreSQL de Render.</p>
+  <ul>
+    <li>No borres la base PostgreSQL en Render.</li>
+    <li>No cambies el <strong>DATABASE_URL</strong> por una base nueva si quieres conservar la información.</li>
+    <li>No agregues código con <code>drop_all()</code>, eliminación masiva o reinicio de tablas.</li>
+    <li><code>db.create_all()</code> solo crea tablas faltantes; no borra datos existentes.</li>
+  </ul>
+</section>
+{% endblock %}
