@@ -1,29 +1,103 @@
-services:
-  - type: web
-    name: lamericana-cloud
-    env: python
-    plan: starter
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
-    healthCheckPath: /api/v1/health
-    envVars:
-      - key: SECRET_KEY
-        generateValue: true
-      - key: ADMIN_USER
-        value: gustavo
-      - key: ADMIN_PASSWORD
-        value: "1176"
-      - key: ADMIN_CODE
-        value: GS
-      - key: ADMIN_NAME
-        value: Gustavo
-      - key: DATABASE_URL
-        fromDatabase:
-          name: lamericana-cloud-db
-          property: connectionString
+{% extends "base.html" %}
+{% block header %}Usuarios y accesos{% endblock %}
+{% block content %}
+{% set editing = edit_user is not none %}
+<section class="panel">
+  <h2>{{ 'Editar usuario' if editing else 'Crear usuario' }}</h2>
+  <form method="post" action="{{ url_for('user_edit', user_id=edit_user.id) if editing else url_for('users_view') }}" class="grid">
+    <div class="row3">
+      <div class="field">
+        <label>Usuario</label>
+        <input name="username" value="{{ edit_user.username if editing else '' }}" placeholder="ej: kd" required>
+      </div>
+      <div class="field">
+        <label>Nombre</label>
+        <input name="full_name" value="{{ edit_user.full_name if editing else '' }}" placeholder="Nombre completo">
+      </div>
+      <div class="field">
+        <label>Código etiqueta</label>
+        <input name="code" value="{{ edit_user.code if editing else '' }}" placeholder="KD">
+      </div>
+    </div>
+    <div class="row3">
+      <div class="field">
+        <label>{{ 'Nueva clave' if editing else 'Clave' }}</label>
+        <input name="password" type="password" placeholder="{{ 'Dejar vacío para mantener la clave actual' if editing else 'Clave inicial obligatoria' }}" {% if not editing %}required{% endif %}>
+      </div>
+      <div class="field">
+        <label>Rol</label>
+        <select name="role">
+          {% for role in ['operator', 'supervisor', 'admin', 'auditor'] %}
+            <option value="{{ role }}" {% if editing and edit_user.role == role %}selected{% endif %}>{{ role|capitalize }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Estado</label>
+        <label class="checkline"><input type="checkbox" name="active" {% if (editing and edit_user.active) or not editing %}checked{% endif %}> Activo</label>
+      </div>
+    </div>
 
-databases:
-  - name: lamericana-cloud-db
-    databaseName: lamericana_cloud
-    user: lamericana_cloud_user
-    plan: starter
+    <div class="section-title">Permisos</div>
+    <div class="checkbox-grid">
+      {% for key, default_value in permissions.items() %}
+        {% set is_checked = (edit_user.permissions.get(key, False) if editing else default_value) %}
+        <label class="checkline"><input type="checkbox" name="{{ key }}" {% if is_checked %}checked{% endif %}> {{ key }}</label>
+      {% endfor %}
+    </div>
+    <div class="filters">
+      <button class="btn" style="max-width:220px">{{ 'Guardar cambios' if editing else 'Crear usuario' }}</button>
+      {% if editing %}<a class="btn secondary" href="{{ url_for('users_view') }}">Cancelar edición</a>{% endif %}
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Usuarios registrados</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Usuario</th>
+          <th>Código</th>
+          <th>Nombre</th>
+          <th>Rol</th>
+          <th>Activo</th>
+          <th>Permisos activos</th>
+          <th>Acción</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td><strong>{{ u.username }}</strong></td>
+          <td>{{ u.code }}</td>
+          <td>{{ u.full_name }}</td>
+          <td><span class="badge">{{ u.role }}</span></td>
+          <td>{{ 'Sí' if u.active else 'No' }}</td>
+          <td>
+            {% set active_perms = [] %}
+            {% for k, v in u.permissions.items() %}{% if v %}{% set _ = active_perms.append(k) %}{% endif %}{% endfor %}
+            {{ active_perms|join(', ') if active_perms else 'Sin permisos especiales' }}
+          </td>
+          <td>
+            <div class="actions-inline">
+              <a class="btn secondary" href="{{ url_for('user_edit', user_id=u.id) }}">Editar</a>
+              {% if u.active %}
+                <form method="post" action="{{ url_for('user_delete', user_id=u.id) }}">
+                  <button class="btn danger" {% if current_user and current_user.id == u.id %}disabled title="No puedes desactivar tu propio usuario"{% endif %}>Desactivar</button>
+                </form>
+              {% else %}
+                <form method="post" action="{{ url_for('user_activate', user_id=u.id) }}">
+                  <button class="btn">Activar</button>
+                </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
