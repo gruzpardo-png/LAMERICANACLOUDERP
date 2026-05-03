@@ -1,13 +1,42 @@
-{% extends "base.html" %}
-{% block title %}Ingreso · La Americana Cloud{% endblock %}
-{% block public %}
-<div class="login-wrap">
-  <form class="login-card" method="post">
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}La Americana Cloud{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+{% if current_user %}
+<div class="layout">
+  <aside class="sidebar">
     <div class="brand">La Americana Cloud<small>RUZ Technology company</small></div>
-    {% for category, message in get_flashed_messages(with_categories=true) %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
-    <div class="field"><label>Usuario</label><input class="input" name="username" autocomplete="username" autofocus></div><br>
-    <div class="field"><label>Clave</label><input class="input" name="password" type="password" autocomplete="current-password"></div><br>
-    <button class="btn" style="width:100%">Ingresar</button>
-  </form>
+    <nav class="nav">
+      <a href="{{ url_for('dashboard') }}">📊 Dashboard producción</a>
+      <a href="{{ url_for('production_view') }}">📋 Consulta producción</a>
+      <a href="{{ url_for('prices_view') }}">🏷️ Precios y familias</a>
+      <a href="{{ url_for('users_view') }}">👥 Usuarios</a>
+      <a href="{{ url_for('integrations_view') }}">🔌 Integraciones</a>
+      <a href="{{ url_for('settings_view') }}">⚙️ Configuración</a>
+      <a href="{{ url_for('backups_view') }}">💾 Respaldos</a>
+      <a href="{{ url_for('audit_view') }}">🧾 Auditoría</a>
+      <a href="{{ url_for('logout') }}">↩️ Salir</a>
+    </nav>
+    <div class="sidebar-footer">cloud.lamericana.cl</div>
+  </aside>
+  <main class="main">
+    <div class="topbar">
+      <div><h1 class="h1">{% block header %}Panel{% endblock %}</h1><div class="sub">Sistema cloud para etiquetas, precios, usuarios y producción.</div></div>
+      <div class="user-pill">{{ current_user.code }} · {{ current_user.full_name }} · {{ current_user.role }}</div>
+    </div>
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
 </div>
-{% endblock %}
+{% else %}
+  {% block public %}{% endblock %}
+{% endif %}
+</body>
+</html>
