@@ -415,14 +415,42 @@ def shoe_family_set():
     return {x.strip().lower() for x in raw.split(",") if x.strip()}
 
 
+def parse_int_arg(name):
+    raw = (request.args.get(name) or "").strip()
+    if not raw:
+        return None
+    cleaned = re.sub(r"[^0-9]", "", raw)
+    return int(cleaned) if cleaned else None
+
+
+def parse_float_arg(name):
+    raw = (request.args.get(name) or "").strip().replace(",", ".")
+    if not raw:
+        return None
+    match = re.search(r"[-+]?\d*\.?\d+", raw)
+    return float(match.group()) if match else None
+
+
 def build_filtered_query():
     q = Production.query
     start_d = parse_date_arg("start")
     end_d = parse_date_arg("end")
+    fecha_bal_start = parse_date_arg("fecha_balanza_start")
+    fecha_bal_end = parse_date_arg("fecha_balanza_end")
+
     familia = (request.args.get("familia") or "").strip().lower()
     in_desc = (request.args.get("in") or "").strip()
     usuario = (request.args.get("usuario") or "").strip().lower()
     terminal = (request.args.get("terminal") or "").strip()
+    modo = (request.args.get("modo") or "").strip()
+    codigo = (request.args.get("codigo") or "").strip()
+    descripcion = (request.args.get("descripcion") or "").strip()
+    idx_kilo = (request.args.get("idx_kilo") or "").strip().replace(",", ".")
+
+    precio_min = parse_int_arg("precio_min")
+    precio_max = parse_int_arg("precio_max")
+    peso_min = parse_float_arg("peso_min")
+    peso_max = parse_float_arg("peso_max")
 
     if start_d:
         q = q.filter(Production.timestamp >= datetime.combine(start_d, datetime.min.time()))
@@ -436,6 +464,27 @@ def build_filtered_query():
         q = q.filter(func.lower(Production.usuario) == usuario)
     if terminal:
         q = q.filter(Production.terminal == terminal)
+    if modo:
+        q = q.filter(Production.modo_impresion.ilike(f"%{modo}%"))
+    if codigo:
+        q = q.filter(Production.codigo_producto.ilike(f"%{codigo}%"))
+    if descripcion:
+        q = q.filter(Production.descripcion.ilike(f"%{descripcion}%"))
+    if idx_kilo:
+        # IDX se guarda como: "10.50  GS T1". El prefijo corresponde al valor kilo/IDX antes de usuario-terminal.
+        q = q.filter(Production.idx.ilike(f"{idx_kilo}%"))
+    if precio_min is not None:
+        q = q.filter(Production.precio_int >= precio_min)
+    if precio_max is not None:
+        q = q.filter(Production.precio_int <= precio_max)
+    if peso_min is not None:
+        q = q.filter(Production.peso_kg >= peso_min)
+    if peso_max is not None:
+        q = q.filter(Production.peso_kg <= peso_max)
+    if fecha_bal_start:
+        q = q.filter(Production.fecha_balanza >= fecha_bal_start.isoformat())
+    if fecha_bal_end:
+        q = q.filter(Production.fecha_balanza <= fecha_bal_end.isoformat())
     return q
 
 
@@ -1049,7 +1098,9 @@ def production_view():
     rows = q.limit(1000).all()
     families = Family.query.order_by(Family.order_index.asc(), Family.name.asc()).all()
     users = User.query.order_by(User.username.asc()).all()
-    return render_template("production.html", rows=rows, families=families, users=users)
+    terminals = [x[0] for x in db.session.query(Production.terminal).distinct().order_by(Production.terminal.asc()).all() if x[0]]
+    modos = [x[0] for x in db.session.query(Production.modo_impresion).distinct().order_by(Production.modo_impresion.asc()).all() if x[0]]
+    return render_template("production.html", rows=rows, families=families, users=users, terminals=terminals, modos=modos)
 
 
 @app.route("/produccion/export.csv")
