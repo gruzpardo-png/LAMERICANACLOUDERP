@@ -1,6 +1,7 @@
-SECRET_KEY=change-me
-DATABASE_URL=sqlite:///lamericana_cloud.sqlite3
-ADMIN_USER=gustavo
-ADMIN_PASSWORD=1176
-ADMIN_CODE=GS
-ADMIN_NAME=Gustavo
+Flask==3.1.1
+Flask-SQLAlchemy==3.1.1
+gunicorn==23.0.0
+psycopg2-binary==2.9.10
+pandas==2.2.3
+openpyxl==3.1.5
+Werkzeug==3.1.3
