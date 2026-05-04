@@ -9,32 +9,54 @@
   <div class="card"><h3>IN2 activos</h3><div class="metric">{{ stats.in2_active }}</div><p class="muted">Se sincronizan al software local.</p></div>
 </div>
 
-<div class="card">
-  <h3>Crear IN2 oficial</h3>
-  <form method="post" class="form-grid">
-    <input type="hidden" name="action" value="create_official">
-    <label>Familia
-      <select name="family">
-        <option value="">General</option>
-        {% for f in families %}<option value="{{ f.name }}">{{ f.display_name }}</option>{% endfor %}
-      </select>
-    </label>
-    <label>IN oficial / sugerencia
-      <input name="value" placeholder="Ej: ZAPATILLAS PREMIUM">
-    </label>
-    <label>Nombre visual
-      <input name="display_name" placeholder="Opcional">
-    </label>
-    <label>Notas
-      <input name="notes" placeholder="Uso interno">
-    </label>
-    <label class="check"><input type="checkbox" name="active" checked> Activo</label>
-    <button class="btn" type="submit">Guardar IN2</button>
-  </form>
+<div class="grid grid-2">
+  <div class="card">
+    <h3>Crear IN2 oficial</h3>
+    <form method="post" class="form-grid">
+      <input type="hidden" name="action" value="create_official">
+      <label>Familia
+        <select name="family">
+          <option value="">General</option>
+          {% for f in families %}<option value="{{ f.name }}">{{ f.display_name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>IN oficial / sugerencia
+        <input name="value" placeholder="Ej: ZAPATILLAS PREMIUM">
+      </label>
+      <label>Nombre visual
+        <input name="display_name" placeholder="Opcional">
+      </label>
+      <label>Notas
+        <input name="notes" placeholder="Uso interno">
+      </label>
+      <label class="check"><input type="checkbox" name="active" checked> Activo</label>
+      <button class="btn" type="submit">Guardar IN2</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3>Importar IN2 masivo</h3>
+    <p class="muted">Sube una planilla con columnas: <strong>A: IN</strong>, <strong>B: Nombre visual</strong>, <strong>C: Notas</strong>. La familia se puede seleccionar aquí.</p>
+    <form method="post" action="{{ url_for('in2_import_view') }}" enctype="multipart/form-data" class="form-grid">
+      <label>Familia para la planilla
+        <select name="default_family">
+          <option value="">General</option>
+          {% for f in families %}<option value="{{ f.name }}">{{ f.display_name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Archivo .xlsx / .xls / .csv
+        <input type="file" name="file" accept=".xlsx,.xls,.csv" required>
+      </label>
+      <div class="actions-row">
+        <button class="btn" type="submit">Importar IN2</button>
+        <a class="btn secondary" href="{{ url_for('in2_template_download') }}">Descargar plantilla IN2</a>
+      </div>
+    </form>
+  </div>
 </div>
 
 <div class="card">
-  <h3>Filtros</h3>
+  <h3>Filtros IN1 / IN2</h3>
   <form method="get" class="filters">
     <label>Tipo
       <select name="source">
@@ -59,12 +81,40 @@
     <label>Buscar
       <input name="q" value="{{ filters.q }}" placeholder="IN, nota o texto">
     </label>
+    <label>Fecha desde
+      <input type="date" name="date_from" value="{{ filters.date_from }}">
+    </label>
+    <label>Fecha hasta
+      <input type="date" name="date_to" value="{{ filters.date_to }}">
+    </label>
+    <label>Uso mínimo
+      <input name="usage_min" value="{{ filters.usage_min }}" placeholder="Ej: 3">
+    </label>
     <button class="btn" type="submit">Filtrar</button>
   </form>
+  <div class="actions-row" style="margin-top:12px; gap:8px; flex-wrap:wrap">
+    <a class="btn secondary" href="{{ url_for('in_entries_export_xlsx', source=filters.source, family=filters.family, active=filters.active, q=filters.q, date_from=filters.date_from, date_to=filters.date_to, usage_min=filters.usage_min) }}">Exportar filtrado</a>
+    <a class="btn secondary" href="{{ url_for('in_entries_export_xlsx', source='IN1', family=filters.family, active=filters.active, q=filters.q, date_from=filters.date_from, date_to=filters.date_to, usage_min=filters.usage_min) }}">Exportar IN1 filtrado</a>
+    <a class="btn secondary" href="{{ url_for('in_entries_export_xlsx', source='IN2', family=filters.family, active=filters.active, q=filters.q, date_from=filters.date_from, date_to=filters.date_to, usage_min=filters.usage_min) }}">Exportar IN2 filtrado</a>
+  </div>
   <form method="post" style="margin-top:12px">
     <input type="hidden" name="action" value="rebuild_in1">
     <button class="btn secondary" type="submit">Reconstruir IN1 desde producción</button>
     <span class="muted">Útil para poblar la base IN1 con datos históricos ya cargados.</span>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Familias: importar / exportar</h3>
+  <p class="muted">Puedes exportar las familias actuales o importar una planilla con columnas: Familia, Nombre visual, Activa, Orden.</p>
+  <div class="actions-row" style="gap:8px; flex-wrap:wrap">
+    <a class="btn secondary" href="{{ url_for('families_export_xlsx') }}">Exportar familias</a>
+  </div>
+  <form method="post" action="{{ url_for('families_import_view') }}" enctype="multipart/form-data" class="form-grid" style="margin-top:12px">
+    <label>Archivo familias .xlsx / .xls / .csv
+      <input type="file" name="file" accept=".xlsx,.xls,.csv" required>
+    </label>
+    <button class="btn" type="submit">Importar familias</button>
   </form>
 </div>
 
@@ -74,7 +124,7 @@
     <table class="table compact">
       <thead>
         <tr>
-          <th>Tipo</th><th>Familia</th><th>IN</th><th>Usos</th><th>Activo</th><th>Último uso</th><th>Acciones</th>
+          <th>Tipo</th><th>Familia</th><th>IN / edición</th><th>Usos</th><th>Activo</th><th>Último uso</th><th>Acciones</th>
         </tr>
       </thead>
       <tbody>
