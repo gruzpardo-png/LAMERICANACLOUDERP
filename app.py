@@ -6,8 +6,13 @@ import os
 import re
 import secrets
 import zipfile
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from functools import wraps
+
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 import pandas as pd
 from flask import (
@@ -44,9 +49,16 @@ app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
 db = SQLAlchemy(app)
 
-APP_VERSION = "1.4.7"
+APP_VERSION = "1.4.8"
 MIN_LOCAL_VERSION_DEFAULT = "1.3.0"
 LATEST_LOCAL_VERSION_DEFAULT = "1.4.0"
+
+CHILE_TZ_NAME = os.getenv("APP_TIMEZONE", "America/Santiago")
+try:
+    CHILE_TZ = ZoneInfo(CHILE_TZ_NAME) if ZoneInfo is not None else timezone(timedelta(hours=-4), name=CHILE_TZ_NAME)
+except Exception:
+    # Fallback de emergencia. La zona real se usa cuando el sistema tiene tzdata.
+    CHILE_TZ = timezone(timedelta(hours=-4), name=CHILE_TZ_NAME)
 
 
 # =========================================================
@@ -54,7 +66,51 @@ LATEST_LOCAL_VERSION_DEFAULT = "1.4.0"
 # =========================================================
 
 def utcnow():
-    return datetime.utcnow()
+    """UTC naive para almacenamiento interno en base de datos."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def utc_aware(value=None):
+    """Convierte fecha/hora naive asumida como UTC a aware UTC."""
+    dt = value or utcnow()
+    if isinstance(dt, date) and not isinstance(dt, datetime):
+        dt = datetime(dt.year, dt.month, dt.day)
+    if not isinstance(dt, datetime):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def chile_dt(value=None):
+    """Fecha/hora en zona oficial America/Santiago. Los DateTime naive de BD se asumen UTC."""
+    dt = utc_aware(value)
+    if dt is None:
+        return None
+    return dt.astimezone(CHILE_TZ)
+
+
+def chile_now():
+    return datetime.now(timezone.utc).astimezone(CHILE_TZ)
+
+
+def chile_today():
+    return chile_now().date()
+
+
+def format_chile_dt(value, fmt="%Y-%m-%d %H:%M:%S"):
+    dt = chile_dt(value)
+    return dt.strftime(fmt) if dt else ""
+
+
+def utc_iso(value=None):
+    dt = utc_aware(value)
+    return dt.isoformat() if dt else ""
+
+
+def chile_iso(value=None):
+    dt = chile_dt(value)
+    return dt.isoformat() if dt else ""
 
 
 def clp_to_int(value):
@@ -140,6 +196,24 @@ def jinja_kg(value):
         return f"{float(value):,.3f}".replace(",", "X").replace(".", ",").replace("X", ".") + " kg"
     except Exception:
         return "0,000 kg"
+
+
+@app.template_filter("cldt")
+def jinja_chile_datetime(value, fmt="%Y-%m-%d %H:%M:%S"):
+    return format_chile_dt(value, fmt)
+
+
+@app.template_filter("cldate")
+def jinja_chile_date(value):
+    return format_chile_dt(value, "%Y-%m-%d")
+
+
+@app.context_processor
+def inject_timezone_context():
+    return {
+        "APP_TIMEZONE": CHILE_TZ_NAME,
+        "now_chile": chile_now,
+    }
 
 
 # =========================================================
@@ -888,7 +962,7 @@ def total_from_aggregate(items):
 
 
 def month_bounds(offset=0):
-    today = date.today()
+    today = chile_today()
     month = today.month - offset
     year = today.year
     while month <= 0:
@@ -923,7 +997,7 @@ def productivity_stats(rows):
 
 def build_productivity_matrix(rows, users):
     periods = []
-    today = date.today()
+    today = chile_today()
     periods.append(("hoy", today, today + timedelta(days=1)))
     for offset, label in [(0, "mes_actual"), (1, "mes_1"), (2, "mes_2"), (3, "mes_3")]:
         start, end = month_bounds(offset)
@@ -957,7 +1031,7 @@ def production_summary_stats(rows):
 
 def build_user_period_summary(rows, users):
     """Tabla horizontal por usuario: hoy, mes actual, mes-1, mes-2, mes-3 y total del período filtrado."""
-    today = date.today()
+    today = chile_today()
     periods = [
         ("hoy", today, today + timedelta(days=1)),
     ]
@@ -1340,7 +1414,7 @@ def apply_user_form(user):
 
 def iso_dt(value):
     if isinstance(value, datetime):
-        return value.strftime("%Y-%m-%d %H:%M:%S")
+        return format_chile_dt(value)
     if isinstance(value, date):
         return value.isoformat()
     return value
@@ -1370,7 +1444,8 @@ def backup_snapshot():
     return {
         "app": "lamericana-cloud",
         "schema_version": 1,
-        "created_at": utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "created_at": format_chile_dt(utcnow()),
+        "timezone": CHILE_TZ_NAME,
         "counts": {
             "users": len(users),
             "families": len(families),
@@ -1524,9 +1599,9 @@ def in_entry_to_export_dict(e):
         "notas": e.notes,
         "activo": "Sí" if e.active else "No",
         "usos": e.usage_count,
-        "ultimo_uso": e.last_seen_at.strftime("%Y-%m-%d %H:%M:%S") if e.last_seen_at else "",
-        "creado": e.created_at.strftime("%Y-%m-%d %H:%M:%S") if e.created_at else "",
-        "actualizado": e.updated_at.strftime("%Y-%m-%d %H:%M:%S") if e.updated_at else "",
+        "ultimo_uso": format_chile_dt(e.last_seen_at) if e.last_seen_at else "",
+        "creado": format_chile_dt(e.created_at) if e.created_at else "",
+        "actualizado": format_chile_dt(e.updated_at) if e.updated_at else "",
         "promovido_desde_id": e.promoted_from_id or "",
     }
 
@@ -2348,7 +2423,7 @@ def backups_view():
 @role_required("admin")
 def backup_download_zip():
     snapshot = backup_snapshot()
-    stamp = utcnow().strftime("%Y%m%d_%H%M%S")
+    stamp = chile_now().strftime("%Y%m%d_%H%M%S")
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(
@@ -2387,7 +2462,7 @@ def backup_download_zip():
 @role_required("admin")
 def backup_download_json():
     snapshot = backup_snapshot()
-    stamp = utcnow().strftime("%Y%m%d_%H%M%S")
+    stamp = chile_now().strftime("%Y%m%d_%H%M%S")
     payload = json.dumps(snapshot, ensure_ascii=False, indent=2, default=str)
     resp = make_response(payload)
     resp.headers["Content-Type"] = "application/json; charset=utf-8"
@@ -2609,7 +2684,7 @@ def in_entries_export_xlsx():
     rows = in_entries_query_from_filters(filters).order_by(InEntry.source_type.asc(), InEntry.family.asc(), InEntry.usage_count.desc(), InEntry.value.asc()).all()
     df = pd.DataFrame([in_entry_to_export_dict(e) for e in rows])
     source = filters.get("source") or "IN"
-    stamp = utcnow().strftime("%Y%m%d_%H%M")
+    stamp = chile_now().strftime("%Y%m%d_%H%M")
     audit(current_user().username, "export_in_registry", f"{source} registros={len(rows)} filtros={filters}")
     db.session.commit()
     return dataframe_download(df, f"lamericana_{source.lower()}_export_{stamp}.xlsx", "RegistroIN")
@@ -2654,7 +2729,7 @@ def families_export_xlsx():
             "nombre_visual": f.display_name,
             "activa": "Sí" if f.active else "No",
             "orden": f.order_index,
-            "actualizado": f.updated_at.strftime("%Y-%m-%d %H:%M:%S") if f.updated_at else "",
+            "actualizado": format_chile_dt(f.updated_at) if f.updated_at else "",
         })
     audit(current_user().username, "export_families", f"familias={len(rows)}")
     db.session.commit()
@@ -2689,7 +2764,15 @@ def audit_view():
 
 @app.route("/api/v1/health")
 def api_health():
-    return jsonify({"ok": True, "app": "lamericana-cloud", "time": utcnow().isoformat()})
+    return jsonify({
+        "ok": True,
+        "app": "lamericana-cloud",
+        "utc_datetime": utc_iso(),
+        "chile_datetime": chile_iso(),
+        "chile_time": format_chile_dt(utcnow()),
+        "timezone": CHILE_TZ_NAME,
+        "unixtime": int(utc_aware().timestamp()),
+    })
 
 
 @app.route("/api/v1/auth/login", methods=["POST"])
@@ -2736,8 +2819,28 @@ def api_login():
         "sync_valid_hours": int(setting_value("sync_valid_hours", "24") or 24),
         "local_latest_version": setting_value("local_latest_version", LATEST_LOCAL_VERSION_DEFAULT),
         "local_min_version": setting_value("local_min_version", MIN_LOCAL_VERSION_DEFAULT),
-        "server_time": utcnow().isoformat(),
+        "server_time": utc_iso(),
+        "utc_datetime": utc_iso(),
+        "chile_datetime": chile_iso(),
+        "chile_time": format_chile_dt(utcnow()),
+        "timezone": CHILE_TZ_NAME,
+        "unixtime": int(utc_aware().timestamp()),
     })
+
+@app.route("/api/v1/time")
+@api_required
+def api_time():
+    now_utc = utc_aware()
+    now_cl = now_utc.astimezone(CHILE_TZ)
+    return jsonify({
+        "ok": True,
+        "timezone": CHILE_TZ_NAME,
+        "utc_datetime": now_utc.isoformat(),
+        "chile_datetime": now_cl.isoformat(),
+        "chile_time": now_cl.strftime("%Y-%m-%d %H:%M:%S"),
+        "unixtime": int(now_utc.timestamp()),
+    })
+
 
 @app.route("/api/v1/bootstrap")
 @api_required
@@ -2753,7 +2856,12 @@ def api_bootstrap():
     in_suggestions = [e.to_api() for e in InEntry.query.filter_by(source_type="IN2", active=True).order_by(InEntry.family.asc(), InEntry.value.asc()).all()]
     return jsonify({
         "ok": True,
-        "server_time": utcnow().isoformat(),
+        "server_time": utc_iso(),
+        "utc_datetime": utc_iso(),
+        "chile_datetime": chile_iso(),
+        "chile_time": format_chile_dt(utcnow()),
+        "timezone": CHILE_TZ_NAME,
+        "unixtime": int(utc_aware().timestamp()),
         "users": users,
         "families": families,
         "prices": prices,
