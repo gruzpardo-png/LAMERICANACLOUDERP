@@ -892,6 +892,44 @@ def build_productivity_matrix(rows, users):
     return totals, matrix
 
 
+def production_summary_stats(rows):
+    """Resumen ejecutivo para dashboard. Usa la misma lógica de conteo que producción:
+    - ignora réplicas/no cuantificables
+    - zapatillas/calzado cuentan 2 etiquetas = 1 unidad
+    """
+    totals = total_from_aggregate(aggregate_rows(rows, "all"))
+    return {
+        "amount": totals.get("amount", 0),
+        "units": totals.get("units", 0),
+        "kg": totals.get("kg", 0.0),
+    }
+
+
+def build_user_period_summary(rows, users):
+    """Tabla horizontal por usuario: hoy, mes actual, mes-1, mes-2, mes-3 y total del período filtrado."""
+    today = date.today()
+    periods = [
+        ("hoy", today, today + timedelta(days=1)),
+    ]
+    for offset, label in [(0, "mes_actual"), (1, "mes_1"), (2, "mes_2"), (3, "mes_3")]:
+        start, end = month_bounds(offset)
+        periods.append((label, start, end))
+
+    usernames = sorted({u.username for u in users} | {r.usuario for r in rows if r.usuario})
+
+    def build_row(label, source_rows):
+        out = {"usuario": label}
+        for period_label, start, end in periods:
+            out[period_label] = production_summary_stats(rows_for_period(source_rows, start, end))
+        out["total_periodo"] = production_summary_stats(source_rows)
+        return out
+
+    matrix = [build_row("TODOS LOS USUARIOS", rows)]
+    for username in usernames:
+        matrix.append(build_row(username, [r for r in rows if r.usuario == username]))
+    return matrix
+
+
 def parse_price_excel(file_stream, actor="system"):
     xl = pd.ExcelFile(file_stream)
     imported = 0
@@ -1525,7 +1563,7 @@ def dashboard():
     families = Family.query.order_by(Family.order_index.asc(), Family.name.asc()).all()
     users = User.query.order_by(User.username.asc()).all()
     terminals = Terminal.query.order_by(Terminal.code.asc()).all()
-    prod_totals, prod_matrix = build_productivity_matrix(rows, users)
+    user_period_summary = build_user_period_summary(rows, users)
     shoe_pending = totals.get("shoe_pending", 0)
     return render_template(
         "dashboard.html",
@@ -1540,8 +1578,7 @@ def dashboard():
         families=families,
         users=users,
         terminals=terminals,
-        productivity_totals=prod_totals,
-        productivity_matrix=prod_matrix,
+        user_period_summary=user_period_summary,
         shoe_pending=shoe_pending,
     )
 
