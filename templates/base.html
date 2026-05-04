@@ -15,6 +15,8 @@
       <a href="{{ url_for('dashboard') }}">📊 Dashboard producción</a>
       <a href="{{ url_for('production_view') }}">📋 Consulta producción</a>
       <a href="{{ url_for('prices_view') }}">🏷️ Precios y familias</a>
+      <a href="{{ url_for('batches_view') }}">📦 Lotes producción</a>
+      <a href="{{ url_for('terminals_view') }}">🖥️ Terminales</a>
       <a href="{{ url_for('users_view') }}">👥 Usuarios</a>
       <a href="{{ url_for('integrations_view') }}">🔌 Integraciones</a>
       <a href="{{ url_for('settings_view') }}">⚙️ Configuración</a>
@@ -26,7 +28,7 @@
   </aside>
   <main class="main">
     <div class="topbar">
-      <div><h1 class="h1">{% block header %}Panel{% endblock %}</h1><div class="sub">Sistema cloud para etiquetas, precios, usuarios y producción.</div></div>
+      <div><h1 class="h1">{% block header %}Panel{% endblock %}</h1><div class="sub">Sistema cloud para etiquetas, precios, usuarios, producción y terminales.</div></div>
       <div class="user-pill">{{ current_user.code }} · {{ current_user.full_name }} · {{ current_user.role }}</div>
     </div>
     {% for category, message in get_flashed_messages(with_categories=true) %}

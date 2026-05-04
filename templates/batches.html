@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block header %}Lotes de producción{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>Crear / editar lote</h2>
+  <form method="post" class="grid">
+    <div class="row3">
+      <div class="field"><label>Código lote</label><input name="code" placeholder="LOTE-20260504-CHAQ" required></div>
+      <div class="field"><label>Nombre lote</label><input name="name" placeholder="Chaquetas mujer premium"></div>
+      <div class="field"><label>Familia</label><select name="family"><option value="">--</option>{% for f in families %}<option value="{{ f.name }}">{{ f.display_name }}</option>{% endfor %}</select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>IN sugerido</label><input name="in_desc" placeholder="CHAQUETAS MUJER PREMIUM"></div>
+      <label class="checkline"><input type="checkbox" name="active" checked> Activo</label>
+    </div>
+    <button class="btn" style="max-width:220px">Guardar lote</button>
+  </form>
+</section>
+<section class="panel"><h2>Lotes registrados</h2><div class="table-wrap"><table><thead><tr><th>Código</th><th>Nombre</th><th>IN</th><th>Familia</th><th>Activo</th><th>Creado por</th><th>Fecha</th></tr></thead><tbody>{% for b in batches %}<tr><td><strong>{{ b.code }}</strong></td><td>{{ b.name }}</td><td>{{ b.in_desc }}</td><td>{{ b.family }}</td><td>{{ 'Sí' if b.active else 'No' }}</td><td>{{ b.created_by }}</td><td>{{ b.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

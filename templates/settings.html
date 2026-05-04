@@ -7,9 +7,22 @@
       <div class="field"><label>Nombre marca</label><input name="brand_name" value="{{ settings.get('brand_name','La Americana') }}"></div>
       <div class="field"><label>Branding inferior</label><input name="footer_brand" value="{{ settings.get('footer_brand','RUZ Technology company') }}"></div>
     </div>
+    <div class="section-title">Operación local y conteo</div>
     <div class="row">
       <div class="field"><label>Horas válidas de caché local</label><input name="sync_valid_hours" type="number" value="{{ settings.get('sync_valid_hours','24') }}"></div>
       <div class="field"><label>Familias que cuentan 2 etiquetas = 1 unidad</label><input name="shoe_family_names" value="{{ settings.get('shoe_family_names','zapatillas,zapatos,calzado') }}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Familias con regla anti-réplica</label><input name="duplicate_families" value="{{ settings.get('duplicate_families','vestuario,hogar,bolsos') }}"><small class="small-muted">No aplicar a zapatillas/calzado.</small></div>
+      <div class="field"><label>Ventana anti-réplica en segundos</label><input name="duplicate_detection_seconds" type="number" value="{{ settings.get('duplicate_detection_seconds','5') }}"></div>
+    </div>
+    <div class="section-title">Control de versión local</div>
+    <div class="row">
+      <div class="field"><label>Versión local vigente</label><input name="local_latest_version" value="{{ settings.get('local_latest_version','1.4.0') }}"></div>
+      <div class="field"><label>Versión mínima recomendada</label><input name="local_min_version" value="{{ settings.get('local_min_version','1.3.0') }}"></div>
+    </div>
+    <div class="row">
+      <label class="checkline"><input type="checkbox" name="logs_visible" {% if settings.get('logs_visible','1') in ['1','true','on','yes'] %}checked{% endif %}> Mostrar logs locales en el software de terminal</label>
     </div>
     <div class="section-title">Integraciones futuras</div>
     <div class="row">

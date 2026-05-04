@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block header %}Terminales{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>Crear / editar terminal</h2>
+  <form method="post" class="grid">
+    <div class="row3">
+      <div class="field"><label>Código terminal</label><input name="code" placeholder="T1" required></div>
+      <div class="field"><label>Nombre</label><input name="name" placeholder="Producción tienda 1"></div>
+      <div class="field"><label>Ubicación</label><input name="location" placeholder="Tienda 1"></div>
+    </div>
+    <div class="row3">
+      <div class="field"><label>Versión mínima terminal</label><input name="min_version" placeholder="1.3.0"></div>
+      <label class="checkline"><input type="checkbox" name="active" checked> Activo</label>
+      <label class="checkline"><input type="checkbox" name="authorized" checked> Autorizado</label>
+    </div>
+    <div class="field"><label>Notas</label><textarea name="notes" rows="2"></textarea></div>
+    <button class="btn" style="max-width:220px">Guardar terminal</button>
+  </form>
+</section>
+<section class="panel">
+  <h2>Terminales registrados</h2>
+  <div class="table-wrap"><table><thead><tr><th>Código</th><th>Nombre</th><th>Ubicación</th><th>Activo</th><th>Autorizado</th><th>Device ID</th><th>Versión</th><th>Último usuario</th><th>Última conexión</th><th>IP</th></tr></thead><tbody>{% for t in terminals %}<tr><td><strong>{{ t.code }}</strong></td><td>{{ t.name }}</td><td>{{ t.location }}</td><td>{{ 'Sí' if t.active else 'No' }}</td><td>{{ 'Sí' if t.authorized else 'No' }}</td><td>{{ t.device_id }}</td><td>{{ t.current_version }}</td><td>{{ t.last_user }}</td><td>{{ t.last_seen.strftime('%Y-%m-%d %H:%M:%S') if t.last_seen else '' }}</td><td>{{ t.last_ip }}</td></tr>{% endfor %}</tbody></table></div>
+</section>
+{% endblock %}
