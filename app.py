@@ -44,7 +44,7 @@ app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
 db = SQLAlchemy(app)
 
-APP_VERSION = "1.4.6"
+APP_VERSION = "1.4.7"
 MIN_LOCAL_VERSION_DEFAULT = "1.3.0"
 LATEST_LOCAL_VERSION_DEFAULT = "1.4.0"
 
@@ -1402,6 +1402,205 @@ def dataframe_from_records(records):
     return pd.DataFrame(records or [])
 
 
+def truthy_value(value):
+    """Convierte valores de planilla a booleano para importaciones."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(int(value))
+    s = str(value).strip().lower()
+    return s in {"1", "si", "sí", "s", "true", "activo", "activa", "yes", "y", "on"}
+
+
+def uploaded_dataframe(upload):
+    """Lee CSV/XLSX/XLS desde un FileStorage y devuelve DataFrame limpio."""
+    filename = secure_filename(upload.filename or "").lower()
+    raw = upload.read()
+    if not raw:
+        raise ValueError("El archivo está vacío.")
+    bio = io.BytesIO(raw)
+    if filename.endswith((".xlsx", ".xls")):
+        return pd.read_excel(bio)
+    if filename.endswith(".csv"):
+        text = raw.decode("utf-8-sig", errors="replace")
+        return pd.read_csv(io.StringIO(text), sep=None, engine="python")
+    raise ValueError("Formato no soportado. Usa .xlsx, .xls o .csv")
+
+
+def normalize_column_name(value):
+    s = str(value or "").strip().lower()
+    s = re.sub(r"[áàäâ]", "a", s)
+    s = re.sub(r"[éèëê]", "e", s)
+    s = re.sub(r"[íìïî]", "i", s)
+    s = re.sub(r"[óòöô]", "o", s)
+    s = re.sub(r"[úùüû]", "u", s)
+    s = re.sub(r"ñ", "n", s)
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    return s
+
+
+def clean_dataframe_for_import(df):
+    df = df.copy().dropna(how="all")
+    df.columns = [str(c).strip() for c in df.columns]
+    normalized_headers = {normalize_column_name(c) for c in df.columns}
+    known = {"in", "in_oficial", "nombre_in", "nombre", "nombre_visual", "display_name", "notas", "nota", "familia", "family", "activa", "activo", "orden"}
+    if not (normalized_headers & known):
+        df = df.reset_index(drop=True)
+        cols = list(df.columns)
+        first_row = {cols[i]: cols[i] for i in range(len(cols))}
+        df = pd.concat([pd.DataFrame([first_row]), df], ignore_index=True)
+        df.columns = [f"col_{i+1}" for i in range(len(df.columns))]
+    return df
+
+
+def get_cell_value(row, normalized_map, candidates, fallback_index=None):
+    for c in candidates:
+        key = normalize_column_name(c)
+        if key in normalized_map:
+            value = row.get(normalized_map[key])
+            if pd.notna(value):
+                return value
+    if fallback_index is not None and fallback_index < len(row.index):
+        value = row.iloc[fallback_index]
+        if pd.notna(value):
+            return value
+    return ""
+
+
+def parse_in_filters(source_default=""):
+    return {
+        "source": request.args.get("source", source_default).strip().upper(),
+        "family": request.args.get("family", "").strip().lower(),
+        "q": request.args.get("q", "").strip(),
+        "active": request.args.get("active", "all").strip(),
+        "date_from": request.args.get("date_from", "").strip(),
+        "date_to": request.args.get("date_to", "").strip(),
+        "usage_min": request.args.get("usage_min", "").strip(),
+    }
+
+
+def in_entries_query_from_filters(filters):
+    query = InEntry.query
+    if filters.get("source") in {"IN1", "IN2"}:
+        query = query.filter(InEntry.source_type == filters["source"])
+    if filters.get("family"):
+        query = query.filter(InEntry.family == filters["family"])
+    if filters.get("active") == "active":
+        query = query.filter(InEntry.active.is_(True))
+    elif filters.get("active") == "inactive":
+        query = query.filter(InEntry.active.is_(False))
+    if filters.get("q"):
+        like = f"%{filters['q']}%"
+        query = query.filter(db.or_(InEntry.value.ilike(like), InEntry.display_name.ilike(like), InEntry.notes.ilike(like)))
+    if filters.get("usage_min"):
+        try:
+            query = query.filter(InEntry.usage_count >= int(filters["usage_min"]))
+        except Exception:
+            pass
+    date_expr = func.coalesce(InEntry.last_seen_at, InEntry.updated_at, InEntry.created_at)
+    if filters.get("date_from"):
+        try:
+            start = datetime.strptime(filters["date_from"], "%Y-%m-%d")
+            query = query.filter(date_expr >= start)
+        except Exception:
+            pass
+    if filters.get("date_to"):
+        try:
+            end = datetime.strptime(filters["date_to"], "%Y-%m-%d") + timedelta(days=1)
+            query = query.filter(date_expr < end)
+        except Exception:
+            pass
+    return query
+
+
+def in_entry_to_export_dict(e):
+    return {
+        "tipo": e.source_type,
+        "familia": e.family or "general",
+        "in": e.value,
+        "nombre_visual": e.display_name or e.value,
+        "notas": e.notes,
+        "activo": "Sí" if e.active else "No",
+        "usos": e.usage_count,
+        "ultimo_uso": e.last_seen_at.strftime("%Y-%m-%d %H:%M:%S") if e.last_seen_at else "",
+        "creado": e.created_at.strftime("%Y-%m-%d %H:%M:%S") if e.created_at else "",
+        "actualizado": e.updated_at.strftime("%Y-%m-%d %H:%M:%S") if e.updated_at else "",
+        "promovido_desde_id": e.promoted_from_id or "",
+    }
+
+
+def dataframe_download(df, filename, sheet_name="Datos"):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name[:31])
+    output.seek(0)
+    return send_file(output, download_name=filename, as_attachment=True, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+def import_in2_from_dataframe(df, default_family, actor):
+    df = clean_dataframe_for_import(df)
+    normalized_map = {normalize_column_name(c): c for c in df.columns}
+    inserted = updated = skipped = 0
+    for _, row in df.iterrows():
+        value = clean_in_value(get_cell_value(row, normalized_map, ["IN", "IN oficial", "nombre de IN", "nombre_in", "valor", "value"], 0))
+        display_name = clean_in_value(get_cell_value(row, normalized_map, ["Nombre visual", "display_name", "visual", "nombre_visual"], 1))
+        notes = str(get_cell_value(row, normalized_map, ["Notas", "Nota", "notes", "observaciones"], 2) or "").strip()
+        family = clean_in_value(get_cell_value(row, normalized_map, ["Familia", "family"], 3)).lower() or (default_family or "")
+        if not value:
+            skipped += 1
+            continue
+        existing = InEntry.query.filter_by(source_type="IN2", family=family, normalized_value=normalize_in_value(value)).first()
+        entry = upsert_in_entry("IN2", family, value, actor=actor, active=True)
+        if entry:
+            entry.display_name = display_name or value
+            entry.notes = notes
+            entry.active = True
+            updated += 1 if existing else 0
+            inserted += 0 if existing else 1
+    return inserted, updated, skipped
+
+
+def import_families_from_dataframe(df, actor):
+    df = clean_dataframe_for_import(df)
+    normalized_map = {normalize_column_name(c): c for c in df.columns}
+    inserted = updated = skipped = 0
+    for _, row in df.iterrows():
+        name = clean_in_value(get_cell_value(row, normalized_map, ["Familia", "Nombre interno", "name", "nombre"], 0)).lower()
+        display_name = clean_in_value(get_cell_value(row, normalized_map, ["Nombre visual", "display_name", "visual"], 1))
+        active_raw = get_cell_value(row, normalized_map, ["Activa", "Activo", "active"], 2)
+        order_raw = get_cell_value(row, normalized_map, ["Orden", "order", "order_index"], 3)
+        if not name:
+            skipped += 1
+            continue
+        fam = Family.query.filter_by(name=name).first()
+        is_new = fam is None
+        if is_new:
+            fam = Family(name=name)
+        fam.display_name = display_name or name.title()
+        fam.active = truthy_value(active_raw) if str(active_raw).strip() else True
+        try:
+            fam.order_index = int(order_raw)
+        except Exception:
+            if is_new:
+                fam.order_index = Family.query.count() + 1
+        db.session.add(fam)
+        inserted += 1 if is_new else 0
+        updated += 0 if is_new else 1
+    return inserted, updated, skipped
+
+
+def generate_in2_template_response():
+    rows = [
+        {"IN": "ZAPATILLAS VANS", "Nombre visual": "Zapatillas Vans", "Notas": "Sugerencia oficial para zapatillas"},
+        {"IN": "ZAPATILLAS PREMIUM", "Nombre visual": "Zapatillas Premium", "Notas": "Usar para ingresos seleccionados"},
+        {"IN": "CHAQUETAS PREMIUM", "Nombre visual": "Chaquetas Premium", "Notas": "Usar en vestuario invierno"},
+        {"IN": "BOLSOS CUERO", "Nombre visual": "Bolsos Cuero", "Notas": "Usar para familia bolsos"},
+    ]
+    return dataframe_download(pd.DataFrame(rows), "plantilla_importar_in2_lamericana.xlsx", "IN2")
+
+
 
 def load_backup_payload(upload):
     """Lee respaldo .json o .zip generado por La Americana Cloud."""
@@ -2347,7 +2546,7 @@ def in_registry_view():
                 flash("IN actualizado.", "success")
             elif action == "promote":
                 src = InEntry.query.get_or_404(int(request.form.get("id")))
-                promoted = upsert_in_entry("IN2", src.family, src.value, actor=actor, promoted_from_id=src.id, active=True)
+                upsert_in_entry("IN2", src.family, src.value, actor=actor, promoted_from_id=src.id, active=True)
                 audit(actor, "promote_in1_to_in2", f"{src.family}: {src.value}")
                 db.session.commit()
                 flash("IN1 traspasado a IN2 oficial.", "success")
@@ -2368,25 +2567,9 @@ def in_registry_view():
             flash(str(exc), "error")
         return redirect(url_for("in_registry_view"))
 
-    filters = {
-        "source": request.args.get("source", "").strip().upper(),
-        "family": request.args.get("family", "").strip().lower(),
-        "q": request.args.get("q", "").strip(),
-        "active": request.args.get("active", "all").strip(),
-    }
-    query = InEntry.query
-    if filters["source"] in {"IN1", "IN2"}:
-        query = query.filter(InEntry.source_type == filters["source"])
-    if filters["family"]:
-        query = query.filter(InEntry.family == filters["family"])
-    if filters["active"] == "active":
-        query = query.filter(InEntry.active.is_(True))
-    elif filters["active"] == "inactive":
-        query = query.filter(InEntry.active.is_(False))
-    if filters["q"]:
-        like = f"%{filters['q']}%"
-        query = query.filter(db.or_(InEntry.value.ilike(like), InEntry.display_name.ilike(like), InEntry.notes.ilike(like)))
-    entries = query.order_by(InEntry.source_type.asc(), InEntry.family.asc(), InEntry.usage_count.desc(), InEntry.value.asc()).limit(1000).all()
+    filters = parse_in_filters()
+    query = in_entries_query_from_filters(filters)
+    entries = query.order_by(InEntry.source_type.asc(), InEntry.family.asc(), InEntry.usage_count.desc(), InEntry.value.asc()).limit(2000).all()
     families = Family.query.order_by(Family.order_index.asc(), Family.name.asc()).all()
     stats = {
         "in1": InEntry.query.filter_by(source_type="IN1").count(),
@@ -2394,6 +2577,89 @@ def in_registry_view():
         "in2_active": InEntry.query.filter_by(source_type="IN2", active=True).count(),
     }
     return render_template("in_registry.html", entries=entries, families=families, filters=filters, stats=stats)
+
+
+@app.route("/ins/importar-in2", methods=["POST"])
+@login_required
+@role_required("admin", "supervisor")
+def in2_import_view():
+    actor = current_user().username
+    file = request.files.get("file")
+    default_family = request.form.get("default_family", "").strip().lower()
+    if not file or not file.filename:
+        flash("Debes seleccionar una planilla .xlsx, .xls o .csv para importar IN2.", "error")
+        return redirect(url_for("in_registry_view", source="IN2"))
+    try:
+        df = uploaded_dataframe(file)
+        inserted, updated, skipped = import_in2_from_dataframe(df, default_family, actor)
+        audit(actor, "import_in2", f"insertados={inserted}, actualizados={updated}, omitidos={skipped}, familia_default={default_family or 'general'}")
+        db.session.commit()
+        flash(f"IN2 importados: {inserted} nuevos, {updated} actualizados, {skipped} omitidos.", "success")
+    except Exception as exc:
+        db.session.rollback()
+        flash(f"Error importando IN2: {exc}", "error")
+    return redirect(url_for("in_registry_view", source="IN2"))
+
+
+@app.route("/ins/export.xlsx")
+@login_required
+@role_required("admin", "supervisor")
+def in_entries_export_xlsx():
+    filters = parse_in_filters()
+    rows = in_entries_query_from_filters(filters).order_by(InEntry.source_type.asc(), InEntry.family.asc(), InEntry.usage_count.desc(), InEntry.value.asc()).all()
+    df = pd.DataFrame([in_entry_to_export_dict(e) for e in rows])
+    source = filters.get("source") or "IN"
+    stamp = utcnow().strftime("%Y%m%d_%H%M")
+    audit(current_user().username, "export_in_registry", f"{source} registros={len(rows)} filtros={filters}")
+    db.session.commit()
+    return dataframe_download(df, f"lamericana_{source.lower()}_export_{stamp}.xlsx", "RegistroIN")
+
+
+@app.route("/ins/plantilla-in2.xlsx")
+@login_required
+@role_required("admin", "supervisor")
+def in2_template_download():
+    return generate_in2_template_response()
+
+
+@app.route("/ins/importar-familias", methods=["POST"])
+@login_required
+@role_required("admin", "supervisor")
+def families_import_view():
+    actor = current_user().username
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("Debes seleccionar una planilla .xlsx, .xls o .csv para importar familias.", "error")
+        return redirect(url_for("in_registry_view"))
+    try:
+        df = uploaded_dataframe(file)
+        inserted, updated, skipped = import_families_from_dataframe(df, actor)
+        audit(actor, "import_families", f"insertadas={inserted}, actualizadas={updated}, omitidas={skipped}")
+        db.session.commit()
+        flash(f"Familias importadas: {inserted} nuevas, {updated} actualizadas, {skipped} omitidas.", "success")
+    except Exception as exc:
+        db.session.rollback()
+        flash(f"Error importando familias: {exc}", "error")
+    return redirect(url_for("in_registry_view"))
+
+
+@app.route("/ins/familias-export.xlsx")
+@login_required
+@role_required("admin", "supervisor")
+def families_export_xlsx():
+    rows = []
+    for f in Family.query.order_by(Family.order_index.asc(), Family.name.asc()).all():
+        rows.append({
+            "familia": f.name,
+            "nombre_visual": f.display_name,
+            "activa": "Sí" if f.active else "No",
+            "orden": f.order_index,
+            "actualizado": f.updated_at.strftime("%Y-%m-%d %H:%M:%S") if f.updated_at else "",
+        })
+    audit(current_user().username, "export_families", f"familias={len(rows)}")
+    db.session.commit()
+    return dataframe_download(pd.DataFrame(rows), f"lamericana_familias_{utcnow().strftime('%Y%m%d_%H%M')}.xlsx", "Familias")
+
 
 
 @app.route("/integraciones")
