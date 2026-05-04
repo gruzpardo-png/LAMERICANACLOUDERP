@@ -27,3 +27,4 @@ table.dense th, table.dense td{font-size:12px;padding:8px 9px}
 .small-muted{font-size:12px;color:var(--muted)}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:900px){.two-col{grid-template-columns:1fr}}
+.inline-edit{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.table.compact td,.table.compact th{font-size:12px}.btn.small{padding:7px 10px;font-size:12px}.btn.danger{background:#ff6680;color:#08111f}.metric{font-size:28px;font-weight:800;color:#67e8f9}.muted{color:#9fb5cc}.check{display:flex;align-items:center;gap:6px}
