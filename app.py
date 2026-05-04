@@ -44,7 +44,7 @@ app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
 db = SQLAlchemy(app)
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.5"
 MIN_LOCAL_VERSION_DEFAULT = "1.3.0"
 LATEST_LOCAL_VERSION_DEFAULT = "1.4.0"
 
@@ -1747,11 +1747,218 @@ def prices_view():
         else:
             flash(f"Precios importados correctamente: {imported} registros.", "success")
         return redirect(url_for("prices_view"))
+
     families = Family.query.order_by(Family.order_index.asc(), Family.name.asc()).all()
     counts = dict(db.session.query(PriceProduct.family, func.count(PriceProduct.id)).group_by(PriceProduct.family).all())
-    sample_prices = PriceProduct.query.order_by(PriceProduct.family.asc(), PriceProduct.gross_price.asc()).limit(200).all()
+
+    filters = {
+        "family": request.args.get("family", "").strip().lower(),
+        "q": request.args.get("q", "").strip(),
+        "active": request.args.get("active", "active").strip(),
+        "min_price": request.args.get("min_price", "").strip(),
+        "max_price": request.args.get("max_price", "").strip(),
+        "sort": request.args.get("sort", "family_price").strip(),
+        "per_page": request.args.get("per_page", "200").strip(),
+    }
+
+    query = PriceProduct.query
+    if filters["family"]:
+        query = query.filter(PriceProduct.family == filters["family"])
+    if filters["active"] == "active":
+        query = query.filter(PriceProduct.active.is_(True))
+    elif filters["active"] == "inactive":
+        query = query.filter(PriceProduct.active.is_(False))
+    if filters["q"]:
+        like = f"%{filters['q']}%"
+        query = query.filter(db.or_(
+            PriceProduct.product_code.ilike(like),
+            PriceProduct.description.ilike(like),
+            PriceProduct.family.ilike(like),
+        ))
+    min_price = clp_to_int(filters["min_price"])
+    max_price = clp_to_int(filters["max_price"])
+    if min_price > 0:
+        query = query.filter(PriceProduct.gross_price >= min_price)
+    if max_price > 0:
+        query = query.filter(PriceProduct.gross_price <= max_price)
+
+    sort = filters["sort"]
+    if sort == "code":
+        query = query.order_by(PriceProduct.product_code.asc(), PriceProduct.gross_price.asc())
+    elif sort == "description":
+        query = query.order_by(PriceProduct.description.asc(), PriceProduct.gross_price.asc())
+    elif sort == "price_desc":
+        query = query.order_by(PriceProduct.gross_price.desc(), PriceProduct.family.asc())
+    elif sort == "updated":
+        query = query.order_by(PriceProduct.updated_at.desc(), PriceProduct.family.asc())
+    else:
+        query = query.order_by(PriceProduct.family.asc(), PriceProduct.gross_price.asc(), PriceProduct.product_code.asc())
+
+    total_prices = query.count()
+    page = max(1, int(request.args.get("page", 1) or 1))
+    per_page_arg = filters["per_page"]
+    show_all = per_page_arg == "all"
+    if show_all:
+        products = query.limit(10000).all()
+        per_page = "all"
+        pages = 1
+    else:
+        try:
+            per_page = int(per_page_arg or 200)
+        except Exception:
+            per_page = 200
+        per_page = max(25, min(per_page, 1000))
+        pages = max(1, (total_prices + per_page - 1) // per_page)
+        page = min(page, pages)
+        products = query.offset((page - 1) * per_page).limit(per_page).all()
+
     price_history = PriceHistory.query.order_by(PriceHistory.created_at.desc()).limit(200).all()
-    return render_template("prices.html", families=families, counts=counts, sample_prices=sample_prices, price_history=price_history)
+    return render_template(
+        "prices.html",
+        families=families,
+        counts=counts,
+        sample_prices=products,
+        price_history=price_history,
+        filters=filters,
+        total_prices=total_prices,
+        page=page,
+        pages=pages,
+        per_page=per_page,
+        show_all=show_all,
+    )
+
+
+def _safe_return_to_prices():
+    target = request.form.get("return_url") or url_for("prices_view")
+    if not target.startswith("/"):
+        target = url_for("prices_view")
+    return redirect(target)
+
+
+@app.route("/precios/producto/nuevo", methods=["POST"])
+@login_required
+@role_required("admin", "supervisor")
+def price_product_create():
+    family = request.form.get("family", "").strip().lower()
+    product_code = request.form.get("product_code", "").strip()
+    description = request.form.get("description", "").strip()
+    gross_price = clp_to_int(request.form.get("gross_price"))
+    active = bool_from_form("active")
+
+    if not family or not product_code or gross_price <= 0:
+        flash("Familia, código y precio son obligatorios para crear un producto.", "error")
+        return _safe_return_to_prices()
+
+    fam = Family.query.filter_by(name=family).first()
+    if not fam:
+        fam = Family(name=family, display_name=family.title(), active=True, order_index=Family.query.count() + 1)
+        db.session.add(fam)
+        audit(current_user().username, "change_family", f"Familia creada desde producto manual: {family}")
+        db.session.flush()
+
+    exists = PriceProduct.query.filter_by(family=family, product_code=product_code, gross_price=gross_price).first()
+    if exists:
+        flash("Ya existe un producto con la misma familia, código y precio.", "error")
+        return _safe_return_to_prices()
+
+    prod = PriceProduct(family=family, product_code=product_code, description=description, gross_price=gross_price, active=active)
+    db.session.add(prod)
+    db.session.add(PriceHistory(
+        family=family,
+        product_code=product_code,
+        description=description,
+        old_price=0,
+        new_price=gross_price,
+        action="create_manual",
+        actor=current_user().username,
+        source="panel_prices",
+    ))
+    audit(current_user().username, "change_price", f"Producto creado manualmente {family}/{product_code} ${gross_price}")
+    db.session.commit()
+    flash("Producto/precio creado correctamente.", "success")
+    return _safe_return_to_prices()
+
+
+@app.route("/precios/producto/<int:product_id>/guardar", methods=["POST"])
+@login_required
+@role_required("admin", "supervisor")
+def price_product_update(product_id):
+    prod = PriceProduct.query.get_or_404(product_id)
+    old_family = prod.family
+    old_code = prod.product_code
+    old_desc = prod.description
+    old_price = int(prod.gross_price or 0)
+    old_active = bool(prod.active)
+
+    family = request.form.get("family", "").strip().lower()
+    product_code = request.form.get("product_code", "").strip()
+    description = request.form.get("description", "").strip()
+    gross_price = clp_to_int(request.form.get("gross_price"))
+    active = bool_from_form("active")
+
+    if not family or not product_code or gross_price <= 0:
+        flash("Familia, código y precio son obligatorios.", "error")
+        return _safe_return_to_prices()
+
+    duplicate = PriceProduct.query.filter(
+        PriceProduct.id != prod.id,
+        PriceProduct.family == family,
+        PriceProduct.product_code == product_code,
+        PriceProduct.gross_price == gross_price,
+    ).first()
+    if duplicate:
+        flash("No se pudo guardar: ya existe otro producto con la misma familia, código y precio.", "error")
+        return _safe_return_to_prices()
+
+    prod.family = family
+    prod.product_code = product_code
+    prod.description = description
+    prod.gross_price = gross_price
+    prod.active = active
+    db.session.add(prod)
+
+    changed = []
+    if old_family != family:
+        changed.append(f"familia {old_family}->{family}")
+    if old_code != product_code:
+        changed.append(f"código {old_code}->{product_code}")
+    if old_desc != description:
+        changed.append("descripción")
+    if old_price != gross_price:
+        changed.append(f"precio {old_price}->{gross_price}")
+    if old_active != active:
+        changed.append(f"activo {old_active}->{active}")
+
+    if changed:
+        db.session.add(PriceHistory(
+            family=family,
+            product_code=product_code,
+            description=description,
+            old_price=old_price,
+            new_price=gross_price,
+            action="edit_panel" if old_price == gross_price else "change_price_panel",
+            actor=current_user().username,
+            source="panel_prices",
+        ))
+        audit(current_user().username, "change_price", f"Producto editado #{prod.id}: " + "; ".join(changed))
+        db.session.commit()
+        flash("Producto/precio actualizado correctamente.", "success")
+    else:
+        flash("No hubo cambios que guardar.", "success")
+    return _safe_return_to_prices()
+
+
+@app.route("/precios/producto/<int:product_id>/toggle", methods=["POST"])
+@login_required
+@role_required("admin", "supervisor")
+def price_product_toggle(product_id):
+    prod = PriceProduct.query.get_or_404(product_id)
+    prod.active = not bool(prod.active)
+    db.session.add(prod)
+    audit(current_user().username, "change_price", f"Producto {'activado' if prod.active else 'desactivado'} #{prod.id} {prod.family}/{prod.product_code}")
+    db.session.commit()
+    flash("Estado del producto actualizado.", "success")
+    return _safe_return_to_prices()
 
 
 @app.route("/familias", methods=["POST"])
@@ -1769,7 +1976,10 @@ def families_save():
         audit(current_user().username, "change_family", f"{name} -> {display_name or name.title()} activo={fam.active}")
         db.session.commit()
         flash("Familia guardada.", "success")
-    return redirect(url_for("prices_view"))
+    target = request.form.get("return_url") or url_for("prices_view")
+    if not target.startswith("/"):
+        target = url_for("prices_view")
+    return redirect(target)
 
 
 @app.route("/configuracion", methods=["GET", "POST"])
