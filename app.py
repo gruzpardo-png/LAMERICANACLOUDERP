@@ -44,7 +44,7 @@ app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
 db = SQLAlchemy(app)
 
-APP_VERSION = "1.4.5"
+APP_VERSION = "1.4.6"
 MIN_LOCAL_VERSION_DEFAULT = "1.3.0"
 LATEST_LOCAL_VERSION_DEFAULT = "1.4.0"
 
@@ -97,6 +97,16 @@ def parse_datetime_safe(value):
     except Exception:
         return utcnow()
 
+
+
+
+def normalize_in_value(value):
+    """Normaliza textos IN para comparar sin perder el valor visual original."""
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def clean_in_value(value):
+    return re.sub(r"\s+", " ", str(value or "").strip())
 
 def parse_date_arg(name, default=None):
     value = request.args.get(name) or request.form.get(name)
@@ -343,6 +353,46 @@ class ProductionBatch(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     closed_at = db.Column(db.DateTime)
 
+
+
+class InEntry(db.Model):
+    __tablename__ = "in_entries"
+    """Registro de IN.
+
+    source_type:
+      - IN1: textos capturados desde producción real (lo que el usuario escribió).
+      - IN2: catálogo oficial usado para sugerencias en el software local.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    source_type = db.Column(db.String(10), nullable=False, default="IN1", index=True)
+    family = db.Column(db.String(80), nullable=False, default="", index=True)
+    value = db.Column(db.String(255), nullable=False, default="")
+    normalized_value = db.Column(db.String(255), nullable=False, default="", index=True)
+    display_name = db.Column(db.String(255), nullable=False, default="")
+    active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    usage_count = db.Column(db.Integer, nullable=False, default=0)
+    promoted_from_id = db.Column(db.Integer, nullable=True)
+    notes = db.Column(db.Text, nullable=False, default="")
+    created_by = db.Column(db.String(80), nullable=False, default="system")
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+    last_seen_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.UniqueConstraint("source_type", "family", "normalized_value", name="uq_in_source_family_value"),
+    )
+
+    def to_api(self):
+        return {
+            "id": self.id,
+            "source_type": self.source_type,
+            "family": self.family,
+            "value": self.value,
+            "display_name": self.display_name or self.value,
+            "active": self.active,
+            "usage_count": self.usage_count,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
 
 class ApiSession(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -1004,6 +1054,62 @@ def normalize_excel_code(value):
     return s
 
 
+
+def upsert_in_entry(source_type, family, value, actor="system", usage_increment=0, promoted_from_id=None, active=True):
+    value = clean_in_value(value)
+    family = str(family or "").strip().lower()
+    normalized = normalize_in_value(value)
+    if not value or not normalized:
+        return None
+    entry = InEntry.query.filter_by(source_type=source_type, family=family, normalized_value=normalized).first()
+    if not entry:
+        entry = InEntry(
+            source_type=source_type,
+            family=family,
+            value=value,
+            normalized_value=normalized,
+            display_name=value,
+            active=active,
+            usage_count=0,
+            created_by=actor or "system",
+            promoted_from_id=promoted_from_id,
+        )
+        db.session.add(entry)
+    else:
+        # Mantiene el primer texto visual, pero refresca display si estaba vacío.
+        if not entry.display_name:
+            entry.display_name = value
+        if source_type == "IN2":
+            entry.value = value
+            entry.display_name = value
+        if promoted_from_id and not entry.promoted_from_id:
+            entry.promoted_from_id = promoted_from_id
+        entry.active = active if source_type == "IN2" else entry.active
+    if usage_increment:
+        entry.usage_count = int(entry.usage_count or 0) + int(usage_increment)
+        entry.last_seen_at = utcnow()
+    entry.updated_at = utcnow()
+    return entry
+
+
+def register_in_from_production(prod):
+    if not prod or not prod.in_desc:
+        return None
+    return upsert_in_entry("IN1", prod.familia, prod.in_desc, actor=prod.usuario or "terminal", usage_increment=1, active=True)
+
+
+def rebuild_in1_from_production(actor="system"):
+    rows = db.session.query(Production.familia, Production.in_desc, func.count(Production.id), func.max(Production.timestamp)).filter(Production.in_desc != "").group_by(Production.familia, Production.in_desc).all()
+    count = 0
+    for family, value, qty, last_seen in rows:
+        entry = upsert_in_entry("IN1", family, value, actor=actor, usage_increment=0, active=True)
+        if entry:
+            entry.usage_count = int(qty or 0)
+            entry.last_seen_at = last_seen or utcnow()
+            count += 1
+    audit(actor, "rebuild_in1", f"IN1 reconstruido desde producción: {count} registros")
+    return count
+
 def production_from_payload(item):
     raw = dict(item)
     local_uuid = str(item.get("local_uuid") or item.get("uuid") or secrets.token_hex(16))
@@ -1249,6 +1355,7 @@ def backup_snapshot():
     terminals = [t.to_api() for t in Terminal.query.order_by(Terminal.code.asc()).all()]
     price_history = [{"id": h.id, "family": h.family, "product_code": h.product_code, "description": h.description, "old_price": h.old_price, "new_price": h.new_price, "action": h.action, "actor": h.actor, "source": h.source, "created_at": iso_dt(h.created_at)} for h in PriceHistory.query.order_by(PriceHistory.created_at.desc()).limit(10000).all()]
     batches = [{"code": b.code, "name": b.name, "in_desc": b.in_desc, "family": b.family, "active": b.active, "created_by": b.created_by, "created_at": iso_dt(b.created_at), "closed_at": iso_dt(b.closed_at)} for b in ProductionBatch.query.order_by(ProductionBatch.created_at.desc()).all()]
+    in_entries = [e.to_api() for e in InEntry.query.order_by(InEntry.source_type.asc(), InEntry.family.asc(), InEntry.value.asc()).all()]
     settings = {s.key: s.value for s in Setting.query.order_by(Setting.key.asc()).all()}
     audit = [
         {
@@ -1273,6 +1380,7 @@ def backup_snapshot():
             "terminals": len(terminals),
             "price_history": len(price_history),
             "batches": len(batches),
+            "in_entries": len(in_entries),
             "audit": len(audit),
         },
         "data": {
@@ -1283,6 +1391,7 @@ def backup_snapshot():
             "terminals": terminals,
             "price_history": price_history,
             "batches": batches,
+            "in_entries": in_entries,
             "settings": settings,
             "audit": audit,
         },
@@ -1344,6 +1453,7 @@ def restore_backup_snapshot(snapshot, options):
         "terminals_upserted": 0,
         "batches_upserted": 0,
         "price_history_inserted": 0,
+        "in_entries_upserted": 0,
     }
 
     restore_users = options.get("restore_users", True)
@@ -1464,6 +1574,21 @@ def restore_backup_snapshot(snapshot, options):
         batch.created_by = str(item.get("created_by") or batch.created_by or "")
         db.session.add(batch)
         stats["batches_upserted"] += 1
+
+
+    for item in data.get("in_entries") or []:
+        try:
+            source_type = str(item.get("source_type") or "IN2").strip().upper()
+            family = str(item.get("family") or "").strip().lower()
+            value = clean_in_value(item.get("display_name") or item.get("value"))
+            if not value:
+                continue
+            entry = upsert_in_entry(source_type, family, value, actor="backup_restore", usage_increment=0, active=bool(item.get("active", True)))
+            if entry:
+                entry.usage_count = int(item.get("usage_count") or entry.usage_count or 0)
+            stats["in_entries_upserted"] += 1
+        except Exception:
+            pass
 
     for item in data.get("price_history") or []:
         try:
@@ -2187,6 +2312,90 @@ def batches_view():
     return render_template("batches.html", batches=batches, families=families)
 
 
+
+@app.route("/ins", methods=["GET", "POST"])
+@login_required
+@role_required("admin", "supervisor")
+def in_registry_view():
+    if request.method == "POST":
+        action = request.form.get("action", "").strip()
+        actor = current_user().username
+        try:
+            if action == "create_official":
+                family = request.form.get("family", "").strip().lower()
+                value = request.form.get("value", "").strip()
+                if not value:
+                    raise ValueError("Debes ingresar un IN oficial.")
+                entry = upsert_in_entry("IN2", family, value, actor=actor, active=bool_from_form("active"))
+                if entry:
+                    entry.display_name = request.form.get("display_name", "").strip() or value
+                    entry.notes = request.form.get("notes", "").strip()
+                audit(actor, "create_in2", f"{family}: {value}")
+                db.session.commit()
+                flash("IN oficial guardado.", "success")
+            elif action == "update_entry":
+                entry = InEntry.query.get_or_404(int(request.form.get("id")))
+                old = f"{entry.source_type}/{entry.family}/{entry.value}"
+                entry.family = request.form.get("family", entry.family).strip().lower()
+                entry.value = request.form.get("value", entry.value).strip()
+                entry.normalized_value = normalize_in_value(entry.value)
+                entry.display_name = request.form.get("display_name", entry.value).strip() or entry.value
+                entry.notes = request.form.get("notes", entry.notes).strip()
+                entry.active = bool_from_form("active")
+                audit(actor, "update_in", f"{old} -> {entry.source_type}/{entry.family}/{entry.value}")
+                db.session.commit()
+                flash("IN actualizado.", "success")
+            elif action == "promote":
+                src = InEntry.query.get_or_404(int(request.form.get("id")))
+                promoted = upsert_in_entry("IN2", src.family, src.value, actor=actor, promoted_from_id=src.id, active=True)
+                audit(actor, "promote_in1_to_in2", f"{src.family}: {src.value}")
+                db.session.commit()
+                flash("IN1 traspasado a IN2 oficial.", "success")
+            elif action == "toggle":
+                entry = InEntry.query.get_or_404(int(request.form.get("id")))
+                entry.active = not entry.active
+                audit(actor, "toggle_in", f"{entry.source_type}/{entry.family}/{entry.value}: {entry.active}")
+                db.session.commit()
+                flash("Estado del IN actualizado.", "success")
+            elif action == "rebuild_in1":
+                qty = rebuild_in1_from_production(actor=actor)
+                db.session.commit()
+                flash(f"IN1 reconstruido desde producción: {qty} registros.", "success")
+            else:
+                flash("Acción no reconocida.", "error")
+        except Exception as exc:
+            db.session.rollback()
+            flash(str(exc), "error")
+        return redirect(url_for("in_registry_view"))
+
+    filters = {
+        "source": request.args.get("source", "").strip().upper(),
+        "family": request.args.get("family", "").strip().lower(),
+        "q": request.args.get("q", "").strip(),
+        "active": request.args.get("active", "all").strip(),
+    }
+    query = InEntry.query
+    if filters["source"] in {"IN1", "IN2"}:
+        query = query.filter(InEntry.source_type == filters["source"])
+    if filters["family"]:
+        query = query.filter(InEntry.family == filters["family"])
+    if filters["active"] == "active":
+        query = query.filter(InEntry.active.is_(True))
+    elif filters["active"] == "inactive":
+        query = query.filter(InEntry.active.is_(False))
+    if filters["q"]:
+        like = f"%{filters['q']}%"
+        query = query.filter(db.or_(InEntry.value.ilike(like), InEntry.display_name.ilike(like), InEntry.notes.ilike(like)))
+    entries = query.order_by(InEntry.source_type.asc(), InEntry.family.asc(), InEntry.usage_count.desc(), InEntry.value.asc()).limit(1000).all()
+    families = Family.query.order_by(Family.order_index.asc(), Family.name.asc()).all()
+    stats = {
+        "in1": InEntry.query.filter_by(source_type="IN1").count(),
+        "in2": InEntry.query.filter_by(source_type="IN2").count(),
+        "in2_active": InEntry.query.filter_by(source_type="IN2", active=True).count(),
+    }
+    return render_template("in_registry.html", entries=entries, families=families, filters=filters, stats=stats)
+
+
 @app.route("/integraciones")
 @login_required
 def integrations_view():
@@ -2275,6 +2484,7 @@ def api_bootstrap():
     settings = {s.key: s.value for s in Setting.query.all()}
     terminals = [t.to_api() for t in Terminal.query.order_by(Terminal.code.asc()).all()]
     batches = [{"code": b.code, "name": b.name, "in_desc": b.in_desc, "family": b.family, "active": b.active} for b in ProductionBatch.query.filter_by(active=True).order_by(ProductionBatch.created_at.desc()).limit(200).all()]
+    in_suggestions = [e.to_api() for e in InEntry.query.filter_by(source_type="IN2", active=True).order_by(InEntry.family.asc(), InEntry.value.asc()).all()]
     return jsonify({
         "ok": True,
         "server_time": utcnow().isoformat(),
@@ -2284,6 +2494,7 @@ def api_bootstrap():
         "settings": settings,
         "terminals": terminals,
         "batches": batches,
+        "in_suggestions": in_suggestions,
         "local_latest_version": setting_value("local_latest_version", LATEST_LOCAL_VERSION_DEFAULT),
         "local_min_version": setting_value("local_min_version", MIN_LOCAL_VERSION_DEFAULT),
     })
@@ -2310,6 +2521,7 @@ def api_production_bulk():
             prod.terminal = request.api_session.terminal or ""
         db.session.add(prod)
         db.session.flush()
+        register_in_from_production(prod)
         inserted += 1
     if request.api_session and request.api_session.terminal:
         terminal = Terminal.query.filter_by(code=request.api_session.terminal).first()
