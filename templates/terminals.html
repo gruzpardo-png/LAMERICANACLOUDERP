@@ -20,6 +20,6 @@
 </section>
 <section class="panel">
   <h2>Terminales registrados</h2>
-  <div class="table-wrap"><table><thead><tr><th>Código</th><th>Nombre</th><th>Ubicación</th><th>Activo</th><th>Autorizado</th><th>Device ID</th><th>Versión</th><th>Último usuario</th><th>Última conexión</th><th>IP</th></tr></thead><tbody>{% for t in terminals %}<tr><td><strong>{{ t.code }}</strong></td><td>{{ t.name }}</td><td>{{ t.location }}</td><td>{{ 'Sí' if t.active else 'No' }}</td><td>{{ 'Sí' if t.authorized else 'No' }}</td><td>{{ t.device_id }}</td><td>{{ t.current_version }}</td><td>{{ t.last_user }}</td><td>{{ t.last_seen.strftime('%Y-%m-%d %H:%M:%S') if t.last_seen else '' }}</td><td>{{ t.last_ip }}</td></tr>{% endfor %}</tbody></table></div>
+  <div class="table-wrap"><table><thead><tr><th>Código</th><th>Nombre</th><th>Ubicación</th><th>Activo</th><th>Autorizado</th><th>Device ID</th><th>Versión</th><th>Último usuario</th><th>Última conexión</th><th>IP</th></tr></thead><tbody>{% for t in terminals %}<tr><td><strong>{{ t.code }}</strong></td><td>{{ t.name }}</td><td>{{ t.location }}</td><td>{{ 'Sí' if t.active else 'No' }}</td><td>{{ 'Sí' if t.authorized else 'No' }}</td><td>{{ t.device_id }}</td><td>{{ t.current_version }}</td><td>{{ t.last_user }}</td><td>{{ t.last_seen|cldt if t.last_seen else '' }}</td><td>{{ t.last_ip }}</td></tr>{% endfor %}</tbody></table></div>
 </section>
 {% endblock %}

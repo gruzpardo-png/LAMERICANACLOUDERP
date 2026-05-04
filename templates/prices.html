@@ -148,7 +148,7 @@
           <td><input form="price-{{ p.id }}" name="description" value="{{ p.description }}" style="min-width:420px;width:100%"></td>
           <td><input form="price-{{ p.id }}" name="gross_price" type="number" min="1" value="{{ p.gross_price }}" style="width:110px"></td>
           <td><label class="checkline"><input form="price-{{ p.id }}" type="checkbox" name="active" {% if p.active %}checked{% endif %}> Sí</label></td>
-          <td>{{ p.updated_at.strftime('%Y-%m-%d %H:%M') if p.updated_at else '' }}</td>
+          <td>{{ p.updated_at|cldt('%Y-%m-%d %H:%M') if p.updated_at else '' }}</td>
           <td class="actions-inline">
             <button form="price-{{ p.id }}" class="btn secondary">Guardar</button>
             <form method="post" action="{{ url_for('price_product_toggle', product_id=p.id) }}" style="display:inline">
@@ -183,7 +183,7 @@
   <div class="table-wrap">
     <table class="dense">
       <thead><tr><th>Fecha</th><th>Familia</th><th>Código</th><th>Descripción</th><th>Precio anterior</th><th>Precio nuevo</th><th>Acción</th><th>Usuario</th></tr></thead>
-      <tbody>{% for h in price_history %}<tr><td>{{ h.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td><td>{{ h.family }}</td><td>{{ h.product_code }}</td><td>{{ h.description }}</td><td>{{ h.old_price|clp }}</td><td>{{ h.new_price|clp }}</td><td>{{ h.action }}</td><td>{{ h.actor }}</td></tr>{% endfor %}</tbody>
+      <tbody>{% for h in price_history %}<tr><td>{{ h.created_at|cldt }}</td><td>{{ h.family }}</td><td>{{ h.product_code }}</td><td>{{ h.description }}</td><td>{{ h.old_price|clp }}</td><td>{{ h.new_price|clp }}</td><td>{{ h.action }}</td><td>{{ h.actor }}</td></tr>{% endfor %}</tbody>
     </table>
   </div>
 </section>

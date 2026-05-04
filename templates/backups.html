@@ -72,7 +72,7 @@
     <div>
       <h3 class="section-title">Último respaldo descargado</h3>
       {% if last_backup %}
-        <p><strong>{{ last_backup.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</strong> por {{ last_backup.actor }} · {{ last_backup.detail }}</p>
+        <p><strong>{{ last_backup.created_at|cldt }}</strong> por {{ last_backup.actor }} · {{ last_backup.detail }}</p>
       {% else %}
         <p class="muted">Todavía no hay respaldos descargados desde este panel.</p>
       {% endif %}
@@ -80,7 +80,7 @@
     <div>
       <h3 class="section-title">Última restauración</h3>
       {% if last_restore %}
-        <p><strong>{{ last_restore.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</strong> por {{ last_restore.actor }} · {{ last_restore.detail[:240] }}...</p>
+        <p><strong>{{ last_restore.created_at|cldt }}</strong> por {{ last_restore.actor }} · {{ last_restore.detail[:240] }}...</p>
       {% else %}
         <p class="muted">Todavía no hay restauraciones registradas.</p>
       {% endif %}

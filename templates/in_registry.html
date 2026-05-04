@@ -146,7 +146,7 @@
           </td>
           <td>{{ e.usage_count }}</td>
           <td>{{ 'Sí' if e.active else 'No' }}</td>
-          <td>{{ e.last_seen_at.strftime('%Y-%m-%d %H:%M') if e.last_seen_at else '-' }}</td>
+          <td>{{ e.last_seen_at|cldt('%Y-%m-%d %H:%M') if e.last_seen_at else '-' }}</td>
           <td>
             {% if e.source_type == 'IN1' %}
             <form method="post" style="display:inline">
