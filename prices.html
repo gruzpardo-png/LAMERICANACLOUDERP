@@ -1,10 +1,17 @@
 {% extends "base.html" %}
-{% block header %}Integraciones{% endblock %}
+{% block header %}Precios y familias{% endblock %}
 {% block content %}
-<div class="grid cards">
-{% for title,status,desc in cards %}
-  <div class="card"><div class="metric-label">{{ status }}</div><div style="font-size:20px;font-weight:900;margin:8px 0">{{ title }}</div><p class="muted">{{ desc }}</p></div>
-{% endfor %}
+<section class="panel">
+  <h2>Subir planilla Excel de precios</h2>
+  <form class="filters" method="post" enctype="multipart/form-data">
+    <input class="input" style="max-width:460px" type="file" name="file" accept=".xlsx,.xls">
+    <button class="btn">Cargar precios</button>
+  </form>
+  <p class="muted">Formato esperado: una hoja por familia; columnas A: código, B: descripción, C: precio bruto. Al subir, reemplaza los precios de cada familia del Excel.</p>
+</section>
+<div class="row">
+  <section class="panel"><h2>Familias</h2><div class="table-wrap"><table><thead><tr><th>Familia</th><th>Nombre</th><th>Activa</th><th>Precios</th></tr></thead><tbody>{% for f in families %}<tr><td>{{ f.name }}</td><td>{{ f.display_name }}</td><td>{{ 'Sí' if f.active else 'No' }}</td><td>{{ counts.get(f.name,0) }}</td></tr>{% endfor %}</tbody></table></div></section>
+  <section class="panel"><h2>Crear / editar familia</h2><form method="post" action="{{ url_for('families_save') }}" class="grid"><div class="field"><label>Nombre interno</label><input name="name" placeholder="vestuario"></div><div class="field"><label>Nombre visual</label><input name="display_name" placeholder="Vestuario"></div><div class="field"><label>Orden</label><input name="order_index" type="number" value="0"></div><label class="checkline"><input type="checkbox" name="active" checked> Activa</label><button class="btn">Guardar familia</button></form></section>
 </div>
-<section class="panel"><h2>Orden recomendado</h2><p class="muted">Primero estabilizar etiquetas + precios + dashboard. Después conectar Jumpseller para el widget del chatbot; luego WhatsApp e Instagram/Facebook para atención y marketing.</p></section>
+<section class="panel"><h2>Muestra de precios cargados</h2><div class="table-wrap"><table><thead><tr><th>Familia</th><th>Código</th><th>Descripción</th><th>Precio</th></tr></thead><tbody>{% for p in sample_prices %}<tr><td>{{ p.family }}</td><td>{{ p.product_code }}</td><td>{{ p.description }}</td><td>{{ p.gross_price|clp }}</td></tr>{% endfor %}</tbody></table></div></section>
 {% endblock %}

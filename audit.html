@@ -1,10 +1,5 @@
 {% extends "base.html" %}
-{% block header %}Integraciones{% endblock %}
+{% block header %}Auditoría{% endblock %}
 {% block content %}
-<div class="grid cards">
-{% for title,status,desc in cards %}
-  <div class="card"><div class="metric-label">{{ status }}</div><div style="font-size:20px;font-weight:900;margin:8px 0">{{ title }}</div><p class="muted">{{ desc }}</p></div>
-{% endfor %}
-</div>
-<section class="panel"><h2>Orden recomendado</h2><p class="muted">Primero estabilizar etiquetas + precios + dashboard. Después conectar Jumpseller para el widget del chatbot; luego WhatsApp e Instagram/Facebook para atención y marketing.</p></section>
+<section class="panel"><h2>Últimos eventos</h2><div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Actor</th><th>Acción</th><th>Detalle</th></tr></thead><tbody>{% for r in rows %}<tr><td>{{ r.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td><td>{{ r.actor }}</td><td>{{ r.action }}</td><td>{{ r.detail }}</td></tr>{% endfor %}</tbody></table></div></section>
 {% endblock %}

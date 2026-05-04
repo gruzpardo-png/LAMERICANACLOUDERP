@@ -1,78 +1,103 @@
 {% extends "base.html" %}
-{% block header %}Consulta producción{% endblock %}
+{% block header %}Usuarios y accesos{% endblock %}
 {% block content %}
-<form class="panel filters" method="get">
-  <div class="field"><label>Desde</label><input type="date" name="start" value="{{ request.args.get('start','') }}"></div>
-  <div class="field"><label>Hasta</label><input type="date" name="end" value="{{ request.args.get('end','') }}"></div>
-
-  <div class="field"><label>Usuario</label><select name="usuario"><option value="">Todos</option>{% for u in users %}<option value="{{ u.username }}" {% if request.args.get('usuario')==u.username %}selected{% endif %}>{{ u.username }} · {{ u.code }}</option>{% endfor %}</select></div>
-  <div class="field"><label>Terminal</label><select name="terminal"><option value="">Todas</option>{% for t in terminals %}<option value="{{ t }}" {% if request.args.get('terminal')==t %}selected{% endif %}>{{ t }}</option>{% endfor %}</select></div>
-  <div class="field"><label>Familia</label><select name="familia"><option value="">Todas</option>{% for f in families %}<option value="{{ f.name }}" {% if request.args.get('familia')==f.name %}selected{% endif %}>{{ f.display_name }}</option>{% endfor %}</select></div>
-  <div class="field"><label>Modo</label><select name="modo"><option value="">Todos</option>{% for m in modos %}<option value="{{ m }}" {% if request.args.get('modo')==m %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
-
-  <div class="field"><label>Precio desde</label><input name="precio_min" value="{{ request.args.get('precio_min','') }}" placeholder="$ mínimo"></div>
-  <div class="field"><label>Precio hasta</label><input name="precio_max" value="{{ request.args.get('precio_max','') }}" placeholder="$ máximo"></div>
-  <div class="field"><label>Peso desde</label><input name="peso_min" value="{{ request.args.get('peso_min','') }}" placeholder="kg mínimo"></div>
-  <div class="field"><label>Peso hasta</label><input name="peso_max" value="{{ request.args.get('peso_max','') }}" placeholder="kg máximo"></div>
-
-  <div class="field"><label>Código</label><input name="codigo" value="{{ request.args.get('codigo','') }}" placeholder="Código producto"></div>
-  <div class="field"><label>Descripción</label><input name="descripcion" value="{{ request.args.get('descripcion','') }}" placeholder="Texto descripción"></div>
-  <div class="field"><label>IDX valor kilo</label><input name="idx_kilo" value="{{ request.args.get('idx_kilo','') }}" placeholder="Ej: 10.50"></div>
-  <div class="field"><label>IN</label><input name="in" value="{{ request.args.get('in','') }}" placeholder="Producción / procedencia"></div>
-
-  <div class="field"><label>Fecha balanza desde</label><input type="date" name="fecha_balanza_start" value="{{ request.args.get('fecha_balanza_start','') }}"></div>
-  <div class="field"><label>Fecha balanza hasta</label><input type="date" name="fecha_balanza_end" value="{{ request.args.get('fecha_balanza_end','') }}"></div>
-
-  <button class="btn">Filtrar</button>
-  <a class="btn secondary" href="{{ url_for('production_view') }}">Limpiar</a>
-</form>
-
+{% set editing = edit_user is not none %}
 <section class="panel">
-  <h2>Importar / exportar datos</h2>
-  <div class="row">
-    <div>
-      <h3 class="section-title">Importar datos anteriores</h3>
-      <form class="filters" method="post" action="{{ url_for('production_import_csv') }}" enctype="multipart/form-data">
-        <input type="file" name="file" accept=".csv,.xlsx,.xls" class="input" style="max-width:460px" required>
-        <button class="btn secondary">Importar datos</button>
-      </form>
-      <p class="muted">Acepta el historial antiguo <strong>historial_etiquetas.csv</strong> y también archivos Excel exportados desde esta plataforma. El sistema evita duplicados por UUID/hash.</p>
-    </div>
-    <div>
-      <h3 class="section-title">Exportar datos filtrados</h3>
-      <div class="filters">
-        <a class="btn" href="{{ url_for('production_export_xlsx', **request.args) }}">Exportar Excel</a>
-        <a class="btn secondary" href="{{ url_for('production_export_csv', **request.args) }}">Exportar CSV</a>
+  <h2>{{ 'Editar usuario' if editing else 'Crear usuario' }}</h2>
+  <form method="post" action="{{ url_for('user_edit', user_id=edit_user.id) if editing else url_for('users_view') }}" class="grid">
+    <div class="row3">
+      <div class="field">
+        <label>Usuario</label>
+        <input name="username" value="{{ edit_user.username if editing else '' }}" placeholder="ej: kd" required>
       </div>
-      <p class="muted">La exportación respeta todos los filtros aplicados: usuario, terminal, familia, modo, precio, peso, código, descripción, IDX valor kilo, IN y fecha balanza.</p>
+      <div class="field">
+        <label>Nombre</label>
+        <input name="full_name" value="{{ edit_user.full_name if editing else '' }}" placeholder="Nombre completo">
+      </div>
+      <div class="field">
+        <label>Código etiqueta</label>
+        <input name="code" value="{{ edit_user.code if editing else '' }}" placeholder="KD">
+      </div>
     </div>
-  </div>
+    <div class="row3">
+      <div class="field">
+        <label>{{ 'Nueva clave' if editing else 'Clave' }}</label>
+        <input name="password" type="password" placeholder="{{ 'Dejar vacío para mantener la clave actual' if editing else 'Clave inicial obligatoria' }}" {% if not editing %}required{% endif %}>
+      </div>
+      <div class="field">
+        <label>Rol</label>
+        <select name="role">
+          {% for role in ['operator', 'supervisor', 'admin', 'auditor'] %}
+            <option value="{{ role }}" {% if editing and edit_user.role == role %}selected{% endif %}>{{ role|capitalize }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Estado</label>
+        <label class="checkline"><input type="checkbox" name="active" {% if (editing and edit_user.active) or not editing %}checked{% endif %}> Activo</label>
+      </div>
+    </div>
+
+    <div class="section-title">Permisos</div>
+    <div class="checkbox-grid">
+      {% for key, default_value in permissions.items() %}
+        {% set is_checked = (edit_user.permissions.get(key, False) if editing else default_value) %}
+        <label class="checkline"><input type="checkbox" name="{{ key }}" {% if is_checked %}checked{% endif %}> {{ key }}</label>
+      {% endfor %}
+    </div>
+    <div class="filters">
+      <button class="btn" style="max-width:220px">{{ 'Guardar cambios' if editing else 'Crear usuario' }}</button>
+      {% if editing %}<a class="btn secondary" href="{{ url_for('users_view') }}">Cancelar edición</a>{% endif %}
+    </div>
+  </form>
 </section>
 
 <section class="panel">
-  <h2>Datos consolidados</h2>
-  <p class="muted">El filtro <strong>IDX valor kilo</strong> busca solo el inicio del campo IDX, antes del código de usuario y terminal. Ejemplo: si el IDX es <strong>10.50 GS T1</strong>, puedes filtrar por <strong>10</strong>, <strong>10.5</strong> o <strong>10.50</strong>.</p>
-  <input class="input" id="quickFilter" placeholder="Filtro rápido tipo Excel..." style="margin-bottom:12px">
+  <h2>Usuarios registrados</h2>
   <div class="table-wrap">
-    <table id="dataTable">
+    <table>
       <thead>
         <tr>
-          <th>Fecha</th><th>Usuario</th><th>Terminal</th><th>Familia</th><th>Modo</th><th>Precio</th><th>Peso</th><th>Código</th><th>Descripción</th><th>IDX</th><th>IN</th><th>Fecha balanza</th><th>Hora</th>
+          <th>Usuario</th>
+          <th>Código</th>
+          <th>Nombre</th>
+          <th>Rol</th>
+          <th>Activo</th>
+          <th>Permisos activos</th>
+          <th>Acción</th>
         </tr>
       </thead>
       <tbody>
-        {% for r in rows %}
+        {% for u in users %}
         <tr>
-          <td>{{ r.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td><td>{{ r.usuario }}</td><td>{{ r.terminal }}</td><td>{{ r.familia }}</td><td>{{ r.modo_impresion }}</td><td>{{ r.precio_int|clp }}</td><td>{{ r.peso_kg|kg }}</td><td>{{ r.codigo_producto }}</td><td>{{ r.descripcion }}</td><td>{{ r.idx }}</td><td>{{ r.in_desc }}</td><td>{{ r.fecha_balanza }}</td><td>{{ r.hora_balanza }}</td>
+          <td><strong>{{ u.username }}</strong></td>
+          <td>{{ u.code }}</td>
+          <td>{{ u.full_name }}</td>
+          <td><span class="badge">{{ u.role }}</span></td>
+          <td>{{ 'Sí' if u.active else 'No' }}</td>
+          <td>
+            {% set active_perms = [] %}
+            {% for k, v in u.permissions.items() %}{% if v %}{% set _ = active_perms.append(k) %}{% endif %}{% endfor %}
+            {{ active_perms|join(', ') if active_perms else 'Sin permisos especiales' }}
+          </td>
+          <td>
+            <div class="actions-inline">
+              <a class="btn secondary" href="{{ url_for('user_edit', user_id=u.id) }}">Editar</a>
+              {% if u.active %}
+                <form method="post" action="{{ url_for('user_delete', user_id=u.id) }}">
+                  <button class="btn danger" {% if current_user and current_user.id == u.id %}disabled title="No puedes desactivar tu propio usuario"{% endif %}>Desactivar</button>
+                </form>
+              {% else %}
+                <form method="post" action="{{ url_for('user_activate', user_id=u.id) }}">
+                  <button class="btn">Activar</button>
+                </form>
+              {% endif %}
+            </div>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </section>
-<script>
-const f=document.getElementById('quickFilter');
-const rows=[...document.querySelectorAll('#dataTable tbody tr')];
-f?.addEventListener('input',()=>{const q=f.value.toLowerCase();rows.forEach(r=>{r.style.display=r.innerText.toLowerCase().includes(q)?'':'none'})});
-</script>
 {% endblock %}
