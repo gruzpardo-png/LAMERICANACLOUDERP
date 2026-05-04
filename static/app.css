@@ -19,3 +19,11 @@ a{color:var(--accent);text-decoration:none}.layout{display:flex;min-height:100vh
 
 .warning-box{border:1px solid rgba(245,158,11,.35);background:linear-gradient(180deg,rgba(245,158,11,.10),rgba(255,255,255,.03));}
 .warning-box code{background:rgba(0,0,0,.20);padding:2px 6px;border-radius:6px;}
+.badge.ok{background:rgba(24,210,110,.14);color:#a7ffc8;border-color:rgba(24,210,110,.28)}
+.badge.warn{background:rgba(255,176,32,.14);color:#ffdca3;border-color:rgba(255,176,32,.28)}
+.row-warning td{background:rgba(255,176,32,.065)}
+.total-row td{background:rgba(0,209,255,.06);font-weight:800}
+table.dense th, table.dense td{font-size:12px;padding:8px 9px}
+.small-muted{font-size:12px;color:var(--muted)}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:900px){.two-col{grid-template-columns:1fr}}
