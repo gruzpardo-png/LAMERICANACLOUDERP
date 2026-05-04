@@ -8,11 +8,183 @@
     <button class="btn">Cargar precios</button>
   </form>
   <p class="muted">Formato esperado: una hoja por familia; columnas A: código, B: descripción, C: precio bruto. Al subir, reemplaza los precios de cada familia del Excel y registra historial de cambios.</p>
+  <p class="small-muted">Los terminales locales recibirán estos cambios al iniciar sesión, al presionar <strong>Sincronizar nube</strong> o en su sincronización automática de maestros.</p>
 </section>
+
 <div class="row">
-  <section class="panel"><h2>Familias</h2><div class="table-wrap"><table><thead><tr><th>Familia</th><th>Nombre</th><th>Activa</th><th>Precios</th></tr></thead><tbody>{% for f in families %}<tr><td>{{ f.name }}</td><td>{{ f.display_name }}</td><td>{{ 'Sí' if f.active else 'No' }}</td><td>{{ counts.get(f.name,0) }}</td></tr>{% endfor %}</tbody></table></div></section>
-  <section class="panel"><h2>Crear / editar familia</h2><form method="post" action="{{ url_for('families_save') }}" class="grid"><div class="field"><label>Nombre interno</label><input name="name" placeholder="vestuario"></div><div class="field"><label>Nombre visual</label><input name="display_name" placeholder="Vestuario"></div><div class="field"><label>Orden</label><input name="order_index" type="number" value="0"></div><label class="checkline"><input type="checkbox" name="active" checked> Activa</label><button class="btn">Guardar familia</button></form></section>
+  <section class="panel">
+    <h2>Familias</h2>
+    <p class="small-muted">Puedes editar nombre visual, orden y estado activo directamente desde esta tabla.</p>
+    <div class="table-wrap">
+      <table class="dense">
+        <thead>
+          <tr><th>Familia</th><th>Nombre visual</th><th>Orden</th><th>Activa</th><th>Precios</th><th>Acción</th></tr>
+        </thead>
+        <tbody>
+          {% for f in families %}
+          <tr>
+            <td><strong>{{ f.name }}</strong></td>
+            <td>
+              <form id="fam-{{ f.id }}" method="post" action="{{ url_for('families_save') }}">
+                <input type="hidden" name="return_url" value="{{ request.full_path }}">
+                <input type="hidden" name="name" value="{{ f.name }}">
+              </form>
+              <input form="fam-{{ f.id }}" name="display_name" value="{{ f.display_name }}" style="min-width:180px">
+            </td>
+            <td><input form="fam-{{ f.id }}" name="order_index" type="number" value="{{ f.order_index }}" style="width:90px"></td>
+            <td><label class="checkline"><input form="fam-{{ f.id }}" type="checkbox" name="active" {% if f.active %}checked{% endif %}> Activa</label></td>
+            <td>{{ counts.get(f.name,0) }}</td>
+            <td><button form="fam-{{ f.id }}" class="btn secondary">Guardar</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Crear nueva familia</h2>
+    <form method="post" action="{{ url_for('families_save') }}" class="grid">
+      <input type="hidden" name="return_url" value="{{ request.full_path }}">
+      <div class="field"><label>Nombre interno</label><input name="name" placeholder="vestuario"></div>
+      <div class="field"><label>Nombre visual</label><input name="display_name" placeholder="Vestuario"></div>
+      <div class="field"><label>Orden</label><input name="order_index" type="number" value="0"></div>
+      <label class="checkline"><input type="checkbox" name="active" checked> Activa</label>
+      <button class="btn">Guardar familia</button>
+    </form>
+  </section>
 </div>
-<section class="panel"><h2>Muestra de precios cargados</h2><div class="table-wrap"><table><thead><tr><th>Familia</th><th>Código</th><th>Descripción</th><th>Precio</th></tr></thead><tbody>{% for p in sample_prices %}<tr><td>{{ p.family }}</td><td>{{ p.product_code }}</td><td>{{ p.description }}</td><td>{{ p.gross_price|clp }}</td></tr>{% endfor %}</tbody></table></div></section>
-<section class="panel"><h2>Historial reciente de precios</h2><div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Familia</th><th>Código</th><th>Descripción</th><th>Precio anterior</th><th>Precio nuevo</th><th>Acción</th><th>Usuario</th></tr></thead><tbody>{% for h in price_history %}<tr><td>{{ h.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td><td>{{ h.family }}</td><td>{{ h.product_code }}</td><td>{{ h.description }}</td><td>{{ h.old_price|clp }}</td><td>{{ h.new_price|clp }}</td><td>{{ h.action }}</td><td>{{ h.actor }}</td></tr>{% endfor %}</tbody></table></div></section>
+
+<section class="panel">
+  <h2>Crear producto / precio manual</h2>
+  <form method="post" action="{{ url_for('price_product_create') }}" class="filters">
+    <input type="hidden" name="return_url" value="{{ request.full_path }}">
+    <div class="field" style="min-width:160px"><label>Familia</label><select name="family">{% for f in families %}<option value="{{ f.name }}">{{ f.display_name }}</option>{% endfor %}</select></div>
+    <div class="field" style="min-width:150px"><label>Código</label><input name="product_code" placeholder="60000001"></div>
+    <div class="field" style="min-width:360px;flex:1"><label>Descripción</label><input name="description" placeholder="Descripción visible en etiqueta"></div>
+    <div class="field" style="min-width:130px"><label>Precio bruto</label><input name="gross_price" type="number" min="1" placeholder="8990"></div>
+    <label class="checkline" style="padding-bottom:10px"><input type="checkbox" name="active" checked> Activo</label>
+    <button class="btn">Crear producto</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Control de precios cargados</h2>
+  <form method="get" class="filters">
+    <div class="field" style="min-width:160px">
+      <label>Familia</label>
+      <select name="family">
+        <option value="">Todas</option>
+        {% for f in families %}<option value="{{ f.name }}" {% if filters.family == f.name %}selected{% endif %}>{{ f.display_name }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="field" style="min-width:260px;flex:1">
+      <label>Buscar código / descripción</label>
+      <input name="q" value="{{ filters.q }}" placeholder="Ej: 60000001, Vans, chaqueta">
+    </div>
+    <div class="field" style="min-width:130px">
+      <label>Estado</label>
+      <select name="active">
+        <option value="all" {% if filters.active == 'all' %}selected{% endif %}>Todos</option>
+        <option value="active" {% if filters.active == 'active' %}selected{% endif %}>Activos</option>
+        <option value="inactive" {% if filters.active == 'inactive' %}selected{% endif %}>Inactivos</option>
+      </select>
+    </div>
+    <div class="field" style="min-width:120px"><label>Precio desde</label><input name="min_price" value="{{ filters.min_price }}" inputmode="numeric"></div>
+    <div class="field" style="min-width:120px"><label>Precio hasta</label><input name="max_price" value="{{ filters.max_price }}" inputmode="numeric"></div>
+    <div class="field" style="min-width:150px">
+      <label>Orden</label>
+      <select name="sort">
+        <option value="family_price" {% if filters.sort == 'family_price' %}selected{% endif %}>Familia / precio</option>
+        <option value="code" {% if filters.sort == 'code' %}selected{% endif %}>Código</option>
+        <option value="description" {% if filters.sort == 'description' %}selected{% endif %}>Descripción</option>
+        <option value="price_desc" {% if filters.sort == 'price_desc' %}selected{% endif %}>Precio mayor</option>
+        <option value="updated" {% if filters.sort == 'updated' %}selected{% endif %}>Última edición</option>
+      </select>
+    </div>
+    <div class="field" style="min-width:120px">
+      <label>Ver</label>
+      <select name="per_page">
+        {% for n in [50,100,200,500,1000] %}<option value="{{ n }}" {% if filters.per_page == n|string %}selected{% endif %}>{{ n }}</option>{% endfor %}
+        <option value="all" {% if filters.per_page == 'all' %}selected{% endif %}>Todos</option>
+      </select>
+    </div>
+    <button class="btn">Filtrar</button>
+    <a class="btn secondary" href="{{ url_for('prices_view') }}">Limpiar</a>
+  </form>
+  <div class="kpi-line" style="margin-top:12px">
+    <span class="badge">Resultados <strong>{{ total_prices }}</strong></span>
+    <span class="badge">Página <strong>{{ page }} / {{ pages }}</strong></span>
+    {% if show_all %}<span class="badge warn">Mostrando hasta 10.000 registros</span>{% endif %}
+  </div>
+
+  <div class="table-wrap" style="margin-top:14px">
+    <table class="dense price-edit-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Familia</th>
+          <th>Código</th>
+          <th>Descripción editable</th>
+          <th>Precio</th>
+          <th>Activo</th>
+          <th>Actualizado</th>
+          <th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in sample_prices %}
+        <tr class="{% if not p.active %}row-warning{% endif %}">
+          <td>{{ p.id }}</td>
+          <td>
+            <form id="price-{{ p.id }}" method="post" action="{{ url_for('price_product_update', product_id=p.id) }}">
+              <input type="hidden" name="return_url" value="{{ request.full_path }}">
+            </form>
+            <select form="price-{{ p.id }}" name="family" style="min-width:140px">
+              {% for f in families %}<option value="{{ f.name }}" {% if p.family == f.name %}selected{% endif %}>{{ f.display_name }}</option>{% endfor %}
+            </select>
+          </td>
+          <td><input form="price-{{ p.id }}" name="product_code" value="{{ p.product_code }}" style="min-width:125px"></td>
+          <td><input form="price-{{ p.id }}" name="description" value="{{ p.description }}" style="min-width:420px;width:100%"></td>
+          <td><input form="price-{{ p.id }}" name="gross_price" type="number" min="1" value="{{ p.gross_price }}" style="width:110px"></td>
+          <td><label class="checkline"><input form="price-{{ p.id }}" type="checkbox" name="active" {% if p.active %}checked{% endif %}> Sí</label></td>
+          <td>{{ p.updated_at.strftime('%Y-%m-%d %H:%M') if p.updated_at else '' }}</td>
+          <td class="actions-inline">
+            <button form="price-{{ p.id }}" class="btn secondary">Guardar</button>
+            <form method="post" action="{{ url_for('price_product_toggle', product_id=p.id) }}" style="display:inline">
+              <input type="hidden" name="return_url" value="{{ request.full_path }}">
+              <button class="btn {{ 'danger' if p.active else 'secondary' }}">{{ 'Desactivar' if p.active else 'Activar' }}</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="muted">No hay productos para los filtros seleccionados.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if not show_all and pages > 1 %}
+  <div class="actions-inline" style="margin-top:12px">
+    {% set args = request.args.to_dict() %}
+    {% if page > 1 %}
+      {% set _ = args.update({'page': page-1}) %}<a class="btn secondary" href="{{ url_for('prices_view', **args) }}">← Anterior</a>
+    {% endif %}
+    {% set args = request.args.to_dict() %}
+    {% if page < pages %}
+      {% set _ = args.update({'page': page+1}) %}<a class="btn secondary" href="{{ url_for('prices_view', **args) }}">Siguiente →</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Historial reciente de precios</h2>
+  <div class="table-wrap">
+    <table class="dense">
+      <thead><tr><th>Fecha</th><th>Familia</th><th>Código</th><th>Descripción</th><th>Precio anterior</th><th>Precio nuevo</th><th>Acción</th><th>Usuario</th></tr></thead>
+      <tbody>{% for h in price_history %}<tr><td>{{ h.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td><td>{{ h.family }}</td><td>{{ h.product_code }}</td><td>{{ h.description }}</td><td>{{ h.old_price|clp }}</td><td>{{ h.new_price|clp }}</td><td>{{ h.action }}</td><td>{{ h.actor }}</td></tr>{% endfor %}</tbody>
+    </table>
+  </div>
+</section>
 {% endblock %}
