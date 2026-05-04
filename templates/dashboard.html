@@ -10,6 +10,7 @@
   <div class="field"><label>IN / Producción</label><input name="in" value="{{ request.args.get('in','') }}" placeholder="Ej: TA, BALA, MIX"></div>
   <button class="btn">Filtrar</button><a class="btn secondary" href="{{ url_for('dashboard') }}">Limpiar</a>
 </form>
+
 <div class="grid cards">
   <div class="card"><div class="metric-label">Etiquetas reales</div><div class="metric">{{ totals.raw_labels }}</div><div class="muted">Incluye réplicas y etiquetas sueltas.</div></div>
   <div class="card"><div class="metric-label">Etiquetas cuantificables</div><div class="metric">{{ totals.countable_labels }}</div><div class="muted">Excluye réplicas automáticas.</div></div>
@@ -19,22 +20,85 @@
   <div class="card"><div class="metric-label">Réplicas detectadas</div><div class="metric">{{ totals.duplicates }}</div><div class="muted">Vestuario, hogar y bolsos &lt;= 5 seg.</div></div>
   <div class="card"><div class="metric-label">Zapatillas impares</div><div class="metric">{{ totals.shoe_pending }}</div><div class="muted">Etiquetas sin par para conteo.</div></div>
 </div>
+
 <div class="row">
-  <section class="panel"><h2>Resumen por día</h2><div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Reales</th><th>Cuantificables</th><th>Réplicas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_date|reverse %}<tr><td>{{ r.key }}</td><td>{{ r.raw_labels }}</td><td>{{ r.countable_labels }}</td><td>{{ r.duplicates }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div></section>
-  <section class="panel"><h2>Resumen por IN / descripción producción</h2><div class="table-wrap"><table><thead><tr><th>IN</th><th>Reales</th><th>Cuantificables</th><th>Réplicas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_in %}<tr><td>{{ r.key }}</td><td>{{ r.raw_labels }}</td><td>{{ r.countable_labels }}</td><td>{{ r.duplicates }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div></section>
+  <section class="panel">
+    <h2>Resumen por usuario</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Usuario</th><th>Cuantificables</th><th>Réplicas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead>
+        <tbody>{% for r in by_user %}<tr><td>{{ r.key }}</td><td>{{ r.countable_labels }}</td><td>{{ r.duplicates }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody>
+      </table>
+    </div>
+  </section>
+  <section class="panel">
+    <h2>Resumen por terminal</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Terminal</th><th>Cuantificables</th><th>Réplicas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead>
+        <tbody>{% for r in by_terminal %}<tr><td>{{ r.key }}</td><td>{{ r.countable_labels }}</td><td>{{ r.duplicates }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody>
+      </table>
+    </div>
+  </section>
 </div>
-<div class="row">
-  <section class="panel"><h2>Resumen por usuario</h2><div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Cuantificables</th><th>Réplicas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_user %}<tr><td>{{ r.key }}</td><td>{{ r.countable_labels }}</td><td>{{ r.duplicates }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div></section>
-  <section class="panel"><h2>Resumen por terminal</h2><div class="table-wrap"><table><thead><tr><th>Terminal</th><th>Cuantificables</th><th>Réplicas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_terminal %}<tr><td>{{ r.key }}</td><td>{{ r.countable_labels }}</td><td>{{ r.duplicates }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div></section>
-</div>
-<section class="panel"><h2>Resumen por lote</h2><div class="table-wrap"><table><thead><tr><th>Lote</th><th>Cuantificables</th><th>Réplicas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_batch %}<tr><td>{{ r.key }}</td><td>{{ r.countable_labels }}</td><td>{{ r.duplicates }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div></section>
+
 <section class="panel">
-  <h2>Productividad por persona</h2>
-  <p class="muted">Tiempo estimado = rango entre primera y última etiqueta cuantificable del usuario en el período. Promedio etiquetas/hora usa etiquetas cuantificables.</p>
-  <div class="table-wrap"><table class="dense"><thead><tr><th>Usuario</th><th>Período</th><th>Monto</th><th>Kilos</th><th>Etiquetas</th><th>Tiempo est.</th><th>Etiq./hora</th></tr></thead><tbody>
-    {% set labels = {'hoy':'Hoy','mes_actual':'Mes actual','mes_1':'Mes-1','mes_2':'Mes-2','mes_3':'Mes-3'} %}
-    {% for label, stat in productivity_totals.items() if label != 'usuario' %}<tr class="total-row"><td>TODOS LOS USUARIOS</td><td>{{ labels[label] }}</td><td>{{ stat.amount|clp }}</td><td>{{ stat.kg|kg }}</td><td>{{ stat.labels }}</td><td>{{ '%.2f'|format(stat.hours) }} h</td><td>{{ '%.2f'|format(stat.labels_per_hour) }}</td></tr>{% endfor %}
-    {% for row in productivity_matrix %}{% for label, stat in row.items() if label != 'usuario' %}<tr><td>{{ row.usuario }}</td><td>{{ labels[label] }}</td><td>{{ stat.amount|clp }}</td><td>{{ stat.kg|kg }}</td><td>{{ stat.labels }}</td><td>{{ '%.2f'|format(stat.hours) }} h</td><td>{{ '%.2f'|format(stat.labels_per_hour) }}</td></tr>{% endfor %}{% endfor %}
-  </tbody></table></div>
+  <h2>Resumen mensual por usuario</h2>
+  <p class="muted">Unidades reales excluyen réplicas. En zapatillas/calzado, 2 etiquetas cuantificables equivalen a 1 unidad. El total período respeta los filtros activos del dashboard.</p>
+  <div class="table-wrap">
+    <table class="dense">
+      <thead>
+        <tr><th>Usuarios</th><th>Indicador</th><th>Hoy</th><th>Mes actual</th><th>Mes-1</th><th>Mes-2</th><th>Mes-3</th><th>Total período</th></tr>
+      </thead>
+      <tbody>
+        {% for user_row in user_period_summary %}
+          <tr class="{% if user_row.usuario == 'TODOS LOS USUARIOS' %}total-row{% endif %}">
+            <td rowspan="3"><strong>{{ user_row.usuario }}</strong></td>
+            <td>Monto por usuario</td>
+            <td>{{ user_row.hoy.amount|clp }}</td>
+            <td>{{ user_row.mes_actual.amount|clp }}</td>
+            <td>{{ user_row.mes_1.amount|clp }}</td>
+            <td>{{ user_row.mes_2.amount|clp }}</td>
+            <td>{{ user_row.mes_3.amount|clp }}</td>
+            <td>{{ user_row.total_periodo.amount|clp }}</td>
+          </tr>
+          <tr class="{% if user_row.usuario == 'TODOS LOS USUARIOS' %}total-row{% endif %}">
+            <td>Unidades por usuario (reales sin réplicas)</td>
+            <td>{{ user_row.hoy.units }}</td>
+            <td>{{ user_row.mes_actual.units }}</td>
+            <td>{{ user_row.mes_1.units }}</td>
+            <td>{{ user_row.mes_2.units }}</td>
+            <td>{{ user_row.mes_3.units }}</td>
+            <td>{{ user_row.total_periodo.units }}</td>
+          </tr>
+          <tr class="{% if user_row.usuario == 'TODOS LOS USUARIOS' %}total-row{% endif %}">
+            <td>Kilo por usuario</td>
+            <td>{{ user_row.hoy.kg|kg }}</td>
+            <td>{{ user_row.mes_actual.kg|kg }}</td>
+            <td>{{ user_row.mes_1.kg|kg }}</td>
+            <td>{{ user_row.mes_2.kg|kg }}</td>
+            <td>{{ user_row.mes_3.kg|kg }}</td>
+            <td>{{ user_row.total_periodo.kg|kg }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="row">
+  <section class="panel">
+    <h2>Resumen por día</h2>
+    <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Reales</th><th>Cuantificables</th><th>Réplicas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_date|reverse %}<tr><td>{{ r.key }}</td><td>{{ r.raw_labels }}</td><td>{{ r.countable_labels }}</td><td>{{ r.duplicates }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div>
+  </section>
+  <section class="panel">
+    <h2>Resumen por IN / descripción producción</h2>
+    <div class="table-wrap"><table><thead><tr><th>IN</th><th>Reales</th><th>Cuantificables</th><th>Réplicas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_in %}<tr><td>{{ r.key }}</td><td>{{ r.raw_labels }}</td><td>{{ r.countable_labels }}</td><td>{{ r.duplicates }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div>
+  </section>
+</div>
+
+<section class="panel">
+  <h2>Resumen por lote</h2>
+  <div class="table-wrap"><table><thead><tr><th>Lote</th><th>Cuantificables</th><th>Réplicas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_batch %}<tr><td>{{ r.key }}</td><td>{{ r.countable_labels }}</td><td>{{ r.duplicates }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div>
 </section>
 {% endblock %}
