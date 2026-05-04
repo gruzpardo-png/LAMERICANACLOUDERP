@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Registro IN{% endblock %}
+{% block header %}Registro IN{% endblock %}
+{% block content %}
+
+<div class="grid grid-3">
+  <div class="card"><h3>IN1 capturados</h3><div class="metric">{{ stats.in1 }}</div><p class="muted">Valores escritos por usuarios en producción real.</p></div>
+  <div class="card"><h3>IN2 oficiales</h3><div class="metric">{{ stats.in2 }}</div><p class="muted">Catálogo maestro para sugerencias.</p></div>
+  <div class="card"><h3>IN2 activos</h3><div class="metric">{{ stats.in2_active }}</div><p class="muted">Se sincronizan al software local.</p></div>
+</div>
+
+<div class="card">
+  <h3>Crear IN2 oficial</h3>
+  <form method="post" class="form-grid">
+    <input type="hidden" name="action" value="create_official">
+    <label>Familia
+      <select name="family">
+        <option value="">General</option>
+        {% for f in families %}<option value="{{ f.name }}">{{ f.display_name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>IN oficial / sugerencia
+      <input name="value" placeholder="Ej: ZAPATILLAS PREMIUM">
+    </label>
+    <label>Nombre visual
+      <input name="display_name" placeholder="Opcional">
+    </label>
+    <label>Notas
+      <input name="notes" placeholder="Uso interno">
+    </label>
+    <label class="check"><input type="checkbox" name="active" checked> Activo</label>
+    <button class="btn" type="submit">Guardar IN2</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Filtros</h3>
+  <form method="get" class="filters">
+    <label>Tipo
+      <select name="source">
+        <option value="" {% if not filters.source %}selected{% endif %}>Todos</option>
+        <option value="IN1" {% if filters.source == 'IN1' %}selected{% endif %}>IN1 capturado</option>
+        <option value="IN2" {% if filters.source == 'IN2' %}selected{% endif %}>IN2 oficial</option>
+      </select>
+    </label>
+    <label>Familia
+      <select name="family">
+        <option value="">Todas</option>
+        {% for f in families %}<option value="{{ f.name }}" {% if filters.family == f.name %}selected{% endif %}>{{ f.display_name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Estado
+      <select name="active">
+        <option value="all" {% if filters.active == 'all' %}selected{% endif %}>Todos</option>
+        <option value="active" {% if filters.active == 'active' %}selected{% endif %}>Activos</option>
+        <option value="inactive" {% if filters.active == 'inactive' %}selected{% endif %}>Inactivos</option>
+      </select>
+    </label>
+    <label>Buscar
+      <input name="q" value="{{ filters.q }}" placeholder="IN, nota o texto">
+    </label>
+    <button class="btn" type="submit">Filtrar</button>
+  </form>
+  <form method="post" style="margin-top:12px">
+    <input type="hidden" name="action" value="rebuild_in1">
+    <button class="btn secondary" type="submit">Reconstruir IN1 desde producción</button>
+    <span class="muted">Útil para poblar la base IN1 con datos históricos ya cargados.</span>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Registro IN1 / IN2</h3>
+  <div class="table-wrap">
+    <table class="table compact">
+      <thead>
+        <tr>
+          <th>Tipo</th><th>Familia</th><th>IN</th><th>Usos</th><th>Activo</th><th>Último uso</th><th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in entries %}
+        <tr>
+          <td><strong>{{ e.source_type }}</strong></td>
+          <td>{{ e.family or 'general' }}</td>
+          <td>
+            <form method="post" class="inline-edit">
+              <input type="hidden" name="action" value="update_entry">
+              <input type="hidden" name="id" value="{{ e.id }}">
+              <input name="family" value="{{ e.family }}" style="width:100px">
+              <input name="value" value="{{ e.value }}" style="width:280px">
+              <input name="display_name" value="{{ e.display_name }}" style="width:220px">
+              <input name="notes" value="{{ e.notes }}" style="width:180px" placeholder="Notas">
+              <label class="check"><input type="checkbox" name="active" {% if e.active %}checked{% endif %}> Activo</label>
+              <button class="btn small" type="submit">Guardar</button>
+            </form>
+          </td>
+          <td>{{ e.usage_count }}</td>
+          <td>{{ 'Sí' if e.active else 'No' }}</td>
+          <td>{{ e.last_seen_at.strftime('%Y-%m-%d %H:%M') if e.last_seen_at else '-' }}</td>
+          <td>
+            {% if e.source_type == 'IN1' %}
+            <form method="post" style="display:inline">
+              <input type="hidden" name="action" value="promote">
+              <input type="hidden" name="id" value="{{ e.id }}">
+              <button class="btn small" type="submit">Pasar a IN2</button>
+            </form>
+            {% endif %}
+            <form method="post" style="display:inline">
+              <input type="hidden" name="action" value="toggle">
+              <input type="hidden" name="id" value="{{ e.id }}">
+              <button class="btn small danger" type="submit">{{ 'Desactivar' if e.active else 'Activar' }}</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7">Sin registros.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}
