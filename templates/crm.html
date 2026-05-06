@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block header %}CRM / Leads{% endblock %}
+{% block content %}
+<div class="two-col">
+<section class="panel">
+  <h2>Crear contacto</h2>
+  <form method="post">
+    <input type="hidden" name="form_type" value="contact">
+    <div class="row"><div class="field"><label>Nombre</label><input name="full_name"></div><div class="field"><label>Teléfono WhatsApp</label><input name="phone" placeholder="569..."></div></div>
+    <div class="row"><div class="field"><label>Instagram</label><input name="instagram_user"></div><div class="field"><label>Facebook</label><input name="facebook_user"></div></div>
+    <div class="row"><div class="field"><label>Email</label><input name="email"></div><div class="field"><label>Canal origen</label><select name="origin_channel"><option>web</option><option>whatsapp</option><option>instagram</option><option>facebook</option><option>tiktok</option><option>tienda</option></select></div></div>
+    <div class="row"><div class="field"><label>Ciudad</label><input name="city" value="Quillota"></div><div class="field"><label>Estado</label><select name="status"><option>nuevo</option><option>contactado</option><option>cliente frecuente</option><option>no contactar</option></select></div></div>
+    <label class="checkline"><input type="checkbox" name="marketing_opt_in"> Acepta recibir marketing por WhatsApp</label>
+    <div class="field"><label>Notas</label><textarea name="notes" rows="3"></textarea></div>
+    <button class="btn">Guardar contacto</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Crear lead / interés</h2>
+  <form method="post">
+    <input type="hidden" name="form_type" value="lead">
+    <div class="field"><label>Contacto</label><select name="contact_id"><option value="">-- sin contacto --</option>{% for c in contacts %}<option value="{{ c.id }}">{{ c.full_name }} · {{ c.phone }}</option>{% endfor %}</select></div>
+    <div class="row"><div class="field"><label>Interés</label><input name="interest" placeholder="Zapatillas mujer talla 39"></div><div class="field"><label>Canal</label><select name="channel"><option>whatsapp</option><option>instagram</option><option>facebook</option><option>tiktok</option><option>web</option><option>tienda</option></select></div></div>
+    <div class="row3"><div class="field"><label>Categoría</label><input name="category"></div><div class="field"><label>Familia</label><input name="family"></div><div class="field"><label>Talla</label><input name="size"></div></div>
+    <div class="row"><div class="field"><label>Producto buscado</label><input name="product_requested"></div><div class="field"><label>Tienda preferida</label><input name="store_preference"></div></div>
+    <div class="row"><div class="field"><label>Estado</label><select name="status"><option>nuevo</option><option>por responder</option><option>respondido</option><option>interesado</option><option>visitó tienda</option><option>compró</option><option>perdido</option></select></div><div class="field"><label>Próxima acción</label><input name="next_action"></div></div>
+    <div class="field"><label>Campaña origen</label><select name="campaign_id"><option value="">--</option>{% for m in campaigns %}<option value="{{ m.id }}">{{ m.title }}</option>{% endfor %}</select></div>
+    <div class="field"><label>Notas</label><textarea name="notes" rows="3"></textarea></div>
+    <button class="btn">Guardar lead</button>
+  </form>
+</section>
+</div>
+
+<section class="panel">
+  <h2>Contactos</h2>
+  <form class="filters"><div class="field"><label>Buscar</label><input name="q" value="{{ request.args.get('q','') }}"></div><div class="field"><label>Estado</label><input name="status" value="{{ request.args.get('status','') }}"></div><button class="btn secondary">Filtrar</button></form>
+  <div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Teléfono</th><th>Canal</th><th>Estado</th><th>Opt-in</th><th>Notas</th></tr></thead><tbody>{% for c in contacts %}<tr><td>{{ c.full_name }}</td><td>{{ c.phone }}</td><td>{{ c.origin_channel }}</td><td>{{ c.status }}</td><td>{{ 'Sí' if c.marketing_opt_in else 'No' }}</td><td>{{ c.notes[:120] }}</td></tr>{% endfor %}</tbody></table></div>
+</section>
+
+<section class="panel">
+  <h2>Leads recientes</h2>
+  <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Contacto</th><th>Interés</th><th>Categoría</th><th>Talla</th><th>Canal</th><th>Estado</th><th>Campaña</th></tr></thead><tbody>{% for l in leads %}<tr><td>{{ l.created_at }}</td><td>{{ l.contact.full_name if l.contact else '--' }}</td><td>{{ l.interest }}</td><td>{{ l.category }}</td><td>{{ l.size }}</td><td>{{ l.channel }}</td><td>{{ l.status }}</td><td>{{ l.campaign.title if l.campaign else '--' }}</td></tr>{% endfor %}</tbody></table></div>
+</section>
+{% endblock %}

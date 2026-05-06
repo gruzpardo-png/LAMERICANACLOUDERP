@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block header %}Promociones activas{% endblock %}
+{% block content %}
+<section class="panel"><h2>Crear promoción</h2>
+<form method="post">
+ <div class="row3"><div class="field"><label>Nombre</label><input name="name" required></div><div class="field"><label>Familia</label><select name="family"><option value="">--</option>{% for f in families %}<option value="{{ f.name }}">{{ f.display_name }}</option>{% endfor %}</select></div><div class="field"><label>Tienda</label><input name="store"></div></div>
+ <div class="row3"><div class="field"><label>Categoría</label><input name="category"></div><div class="field"><label>Descuento / texto</label><input name="discount_text" placeholder="40% descuento"></div><div class="field"><label>Activa</label><label class="checkline"><input type="checkbox" name="active" checked> Sí</label></div></div>
+ <div class="row"><div class="field"><label>Inicio</label><input type="date" name="starts_at"></div><div class="field"><label>Término</label><input type="date" name="ends_at"></div></div>
+ <div class="field"><label>Descripción</label><textarea name="description" rows="4"></textarea></div>
+ <button class="btn">Guardar promoción</button>
+</form></section>
+<section class="panel"><h2>Promociones</h2><div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Familia</th><th>Descuento</th><th>Vigencia</th><th>Activa</th><th>Acción</th></tr></thead><tbody>{% for p in rows %}<tr><td>{{ p.name }}<br><span class="muted">{{ p.description[:160] }}</span></td><td>{{ p.family }}</td><td>{{ p.discount_text }}</td><td>{{ p.starts_at or '--' }} → {{ p.ends_at or '--' }}</td><td>{{ 'Sí' if p.active else 'No' }}</td><td><form method="post" action="{{ url_for('promotion_toggle', promo_id=p.id) }}"><button class="btn small secondary">{{ 'Desactivar' if p.active else 'Activar' }}</button></form></td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

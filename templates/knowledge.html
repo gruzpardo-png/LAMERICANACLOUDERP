@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block header %}Base de conocimiento{% endblock %}
+{% block content %}
+<section class="panel"><h2>Agregar conocimiento del agente</h2>
+<form method="post">
+ <div class="row"><div class="field"><label>Título</label><input name="title" required></div><div class="field"><label>Categoría</label><input name="category" value="general"></div></div>
+ <div class="field"><label>Contenido / regla</label><textarea name="content" rows="6" placeholder="Horarios, direcciones, reglas de stock, tono de marca, preguntas frecuentes..."></textarea></div>
+ <label class="checkline"><input type="checkbox" name="active" checked> Activo</label>
+ <button class="btn">Guardar</button>
+</form></section>
+<section class="panel"><h2>Reglas cargadas</h2><div class="table-wrap"><table><thead><tr><th>Título</th><th>Categoría</th><th>Activo</th><th>Contenido</th></tr></thead><tbody>{% for r in rows %}<tr><td>{{ r.title }}</td><td>{{ r.category }}</td><td>{{ 'Sí' if r.active else 'No' }}</td><td>{{ r.content[:300] }}</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

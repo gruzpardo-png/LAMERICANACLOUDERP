@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block header %}Agente de ventas{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>Responder cliente y guardar lead</h2>
+  <form method="post">
+    <div class="row3"><div class="field"><label>Canal</label><select name="channel"><option>whatsapp</option><option>instagram</option><option>facebook</option><option>tiktok</option><option>web</option></select></div><div class="field"><label>Nombre cliente</label><input name="full_name"></div><div class="field"><label>Teléfono</label><input name="phone"></div></div>
+    <div class="row3"><div class="field"><label>Interés</label><input name="interest" placeholder="Zapatillas Nike"></div><div class="field"><label>Categoría</label><input name="category"></div><div class="field"><label>Talla</label><input name="size"></div></div>
+    <div class="field"><label>Mensaje del cliente</label><textarea name="customer_message" rows="5" required></textarea></div>
+    <label class="checkline"><input type="checkbox" name="save_lead" checked> Guardar interés en CRM</label>
+    <label class="checkline"><input type="checkbox" name="marketing_opt_in"> Cliente acepta recibir promociones por WhatsApp</label>
+    <button class="btn">Generar respuesta y guardar</button>
+  </form>
+</section>
+{% if reply %}
+<section class="panel">
+  <h2>Respuesta sugerida</h2>
+  <textarea rows="8">{{ reply }}</textarea>
+  {% if created_lead %}<p class="badge ok">Lead creado #{{ created_lead.id }}</p>{% endif %}
+</section>
+{% endif %}
+<section class="panel warning-box">
+  <h2>Reglas del agente</h2>
+  <p>No inventar stock exacto. No prometer disponibilidad. No reservar sin sistema. Guardar interés en CRM. Derivar a WhatsApp o tienda.</p>
+</section>
+{% endblock %}

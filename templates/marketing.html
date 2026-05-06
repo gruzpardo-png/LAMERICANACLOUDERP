@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block header %}Marketing IA{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>Crear campaña con IA</h2>
+  <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="action" value="generate">
+    <div class="row3">
+      <div class="field"><label>Título interno</label><input name="title" placeholder="Ej: Zapatillas premium mayo" required></div>
+      <div class="field"><label>Categoría</label><input name="category" placeholder="Zapatillas / Vestuario / Hogar"></div>
+      <div class="field"><label>Familia</label>
+        <select name="family"><option value="">--</option>{% for f in families %}<option value="{{ f.name }}">{{ f.display_name }}</option>{% endfor %}</select>
+      </div>
+    </div>
+    <div class="row3">
+      <div class="field"><label>Tienda</label><input name="store" placeholder="Tienda 1 / Tienda 2 / Ambas"></div>
+      <div class="field"><label>Objetivo</label><select name="objective"><option>Atraer visitas a tienda</option><option>Liquidar stock</option><option>Captar WhatsApp</option><option>Promocionar llegada</option><option>Meta Ads</option></select></div>
+      <div class="field"><label>Canal principal</label><select name="primary_channel"><option>Instagram + Facebook</option><option>WhatsApp</option><option>TikTok</option><option>Meta Ads</option><option>Todos</option></select></div>
+    </div>
+    <div class="row3">
+      <div class="field"><label>Tono</label><select name="tone"><option>Formal comercial</option><option>Cercano chileno</option><option>Urgente liquidación</option><option>Premium</option><option>Juvenil TikTok</option></select></div>
+      <div class="field"><label>Promoción / descuento</label><input name="promotion_text" placeholder="Ej: 30% descuento"></div>
+      <div class="field"><label>Precio desde</label><input name="price_from" placeholder="$9.990"></div>
+    </div>
+    <div class="field"><label>Foto de campaña</label><input type="file" name="image" accept="image/*"></div>
+    <div class="field"><label>Observaciones para la IA</label><textarea name="prompt_input" rows="4" placeholder="Pega detalles de productos, precios, tiendas, estilo del anuncio, etc."></textarea></div>
+    <button class="btn">Generar campaña IA</button>
+  </form>
+</section>
+
+{% if selected %}
+<section class="panel">
+  <h2>Campaña seleccionada: {{ selected.title }} <span class="badge">{{ selected.status }}</span></h2>
+  {% if selected.image_url %}<p><img src="{{ selected.image_url }}" style="max-width:260px;border-radius:18px;border:1px solid var(--border)"></p>{% endif %}
+  <form method="post" action="{{ url_for('marketing_save_texts', campaign_id=selected.id) }}">
+    <div class="row">
+      <div class="field"><label>Facebook muro</label><textarea name="facebook_post" rows="7">{{ selected.facebook_post }}</textarea></div>
+      <div class="field"><label>Facebook historia</label><textarea name="facebook_story" rows="7">{{ selected.facebook_story }}</textarea></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Instagram muro</label><textarea name="instagram_post" rows="7">{{ selected.instagram_post }}</textarea></div>
+      <div class="field"><label>Instagram historia</label><textarea name="instagram_story" rows="7">{{ selected.instagram_story }}</textarea></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>WhatsApp historia / estado manual</label><textarea name="whatsapp_status" rows="6">{{ selected.whatsapp_status }}</textarea></div>
+      <div class="field"><label>WhatsApp difusión</label><textarea name="whatsapp_broadcast" rows="6">{{ selected.whatsapp_broadcast }}</textarea></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>TikTok muro</label><textarea name="tiktok_post" rows="6">{{ selected.tiktok_post }}</textarea></div>
+      <div class="field"><label>TikTok historia</label><textarea name="tiktok_story" rows="6">{{ selected.tiktok_story }}</textarea></div>
+    </div>
+    <div class="row3">
+      <div class="field"><label>Hashtags</label><textarea name="hashtags" rows="3">{{ selected.hashtags }}</textarea></div>
+      <div class="field"><label>CTA</label><textarea name="cta" rows="3">{{ selected.cta }}</textarea></div>
+      <div class="field"><label>Segmento sugerido</label><textarea name="segment" rows="3">{{ selected.segment }}</textarea></div>
+    </div>
+    <div class="field"><label>Notas de riesgo / reglas</label><textarea name="risk_notes" rows="2">{{ selected.risk_notes }}</textarea></div>
+    <div class="field"><label>Estado</label><select name="status"><option {% if selected.status=='generado' %}selected{% endif %}>generado</option><option {% if selected.status=='aprobado' %}selected{% endif %}>aprobado</option><option {% if selected.status=='publicado manual' %}selected{% endif %}>publicado manual</option><option {% if selected.status=='cancelado' %}selected{% endif %}>cancelado</option></select></div>
+    <button class="btn">Guardar textos</button>
+  </form>
+  <div class="actions-inline" style="margin-top:12px">
+    <form method="post" action="{{ url_for('marketing_approve', campaign_id=selected.id) }}"><button class="btn secondary">Aprobar campaña</button></form>
+    <form method="post" action="{{ url_for('marketing_publish_channel', campaign_id=selected.id, channel='facebook_feed') }}"><button class="btn">Publicar Facebook muro</button></form>
+    <form method="post" action="{{ url_for('marketing_publish_channel', campaign_id=selected.id, channel='facebook_story') }}"><button class="btn secondary">Facebook historia</button></form>
+    <form method="post" action="{{ url_for('marketing_publish_channel', campaign_id=selected.id, channel='instagram_feed') }}"><button class="btn">Instagram muro</button></form>
+    <form method="post" action="{{ url_for('marketing_publish_channel', campaign_id=selected.id, channel='instagram_story') }}"><button class="btn secondary">Instagram historia</button></form>
+    <form method="post" action="{{ url_for('marketing_publish_channel', campaign_id=selected.id, channel='whatsapp_status') }}"><button class="btn secondary">WhatsApp historia</button></form>
+    <form method="post" action="{{ url_for('marketing_publish_channel', campaign_id=selected.id, channel='whatsapp_broadcast') }}"><button class="btn">WhatsApp difusión</button></form>
+    <form method="post" action="{{ url_for('marketing_publish_channel', campaign_id=selected.id, channel='tiktok_feed') }}"><button class="btn secondary">TikTok muro</button></form>
+    <form method="post" action="{{ url_for('marketing_publish_channel', campaign_id=selected.id, channel='tiktok_story') }}"><button class="btn secondary">TikTok historia</button></form>
+  </div>
+</section>
+{% endif %}
+
+<section class="panel">
+  <h2>Historial de campañas</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>ID</th><th>Fecha</th><th>Título</th><th>Categoría</th><th>Estado</th><th>Imagen</th><th>Acción</th></tr></thead>
+    <tbody>{% for c in campaigns %}
+      <tr><td>{{ c.id }}</td><td>{{ c.created_at|chile_time if false else c.created_at }}</td><td>{{ c.title }}</td><td>{{ c.category }}</td><td><span class="badge">{{ c.status }}</span></td><td>{% if c.image_url %}Sí{% else %}No{% endif %}</td><td><a class="btn small" href="{{ url_for('marketing_view', campaign_id=c.id) }}">Abrir</a></td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+{% endblock %}
