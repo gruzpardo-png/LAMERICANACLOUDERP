@@ -1,78 +1,101 @@
 {% extends "base.html" %}
-{% block header %}Consulta producción{% endblock %}
+{% block header %}Respaldos de base de datos{% endblock %}
 {% block content %}
-<form class="panel filters" method="get">
-  <div class="field"><label>Desde</label><input type="date" name="start" value="{{ request.args.get('start','') }}"></div>
-  <div class="field"><label>Hasta</label><input type="date" name="end" value="{{ request.args.get('end','') }}"></div>
+<section class="panel">
+  <h2>Respaldo seguro de La Americana Cloud</h2>
+  <p class="muted">Descarga una copia lógica de usuarios, permisos, familias, precios, producción, configuración y auditoría reciente.</p>
+  <div class="cards">
+    {% for k, v in counts.items() %}
+    <div class="card"><span>{{ k }}</span><strong>{{ v }}</strong></div>
+    {% endfor %}
+  </div>
+  <div class="filters" style="margin-top:18px">
+    <a class="btn" href="{{ url_for('backup_download_zip') }}">Descargar respaldo completo ZIP</a>
+    <a class="btn secondary" href="{{ url_for('backup_download_json') }}">Descargar JSON técnico</a>
+  </div>
+  <p class="muted" style="margin-top:14px">Recomendación: descarga un respaldo antes de subir cambios grandes a GitHub o antes de modificar masivamente precios. Guarda el ZIP en Drive/Dropbox o en un disco externo.</p>
+</section>
 
-  <div class="field"><label>Usuario</label><select name="usuario"><option value="">Todos</option>{% for u in users %}<option value="{{ u.username }}" {% if request.args.get('usuario')==u.username %}selected{% endif %}>{{ u.username }} · {{ u.code }}</option>{% endfor %}</select></div>
-  <div class="field"><label>Terminal</label><select name="terminal"><option value="">Todas</option>{% for t in terminals %}<option value="{{ t }}" {% if request.args.get('terminal')==t %}selected{% endif %}>{{ t }}</option>{% endfor %}</select></div>
-  <div class="field"><label>Familia</label><select name="familia"><option value="">Todas</option>{% for f in families %}<option value="{{ f.name }}" {% if request.args.get('familia')==f.name %}selected{% endif %}>{{ f.display_name }}</option>{% endfor %}</select></div>
-  <div class="field"><label>Modo</label><select name="modo"><option value="">Todos</option>{% for m in modos %}<option value="{{ m }}" {% if request.args.get('modo')==m %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
+<section class="panel warning-box">
+  <h2>Restaurar respaldo</h2>
+  <p>Permite subir un respaldo <strong>.zip</strong> o <strong>.json</strong> generado por este mismo sistema. Por seguridad, la producción se fusiona por <code>local_uuid</code> y no se borra salvo que lo marques expresamente.</p>
+  <form method="post" action="{{ url_for('backup_restore_upload') }}" enctype="multipart/form-data" class="grid" style="gap:14px">
+    <div class="field">
+      <label>Archivo de respaldo</label>
+      <input type="file" name="backup_file" accept=".zip,.json,application/json,application/zip" required>
+    </div>
 
-  <div class="field"><label>Precio desde</label><input name="precio_min" value="{{ request.args.get('precio_min','') }}" placeholder="$ mínimo"></div>
-  <div class="field"><label>Precio hasta</label><input name="precio_max" value="{{ request.args.get('precio_max','') }}" placeholder="$ máximo"></div>
-  <div class="field"><label>Peso desde</label><input name="peso_min" value="{{ request.args.get('peso_min','') }}" placeholder="kg mínimo"></div>
-  <div class="field"><label>Peso hasta</label><input name="peso_max" value="{{ request.args.get('peso_max','') }}" placeholder="kg máximo"></div>
+    <div class="row">
+      <div class="field">
+        <label>Modo de restauración</label>
+        <select name="restore_mode">
+          <option value="merge">Seguro: agregar/actualizar sin borrar tablas</option>
+          <option value="replace_masters">Avanzado: reemplazar tablas maestras seleccionadas</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Confirmación obligatoria</label>
+        <input type="text" name="confirm_restore" placeholder="Escribe RESTAURAR" required>
+      </div>
+    </div>
 
-  <div class="field"><label>Código</label><input name="codigo" value="{{ request.args.get('codigo','') }}" placeholder="Código producto"></div>
-  <div class="field"><label>Descripción</label><input name="descripcion" value="{{ request.args.get('descripcion','') }}" placeholder="Texto descripción"></div>
-  <div class="field"><label>IDX valor kilo</label><input name="idx_kilo" value="{{ request.args.get('idx_kilo','') }}" placeholder="Ej: 10.50"></div>
-  <div class="field"><label>IN</label><input name="in" value="{{ request.args.get('in','') }}" placeholder="Producción / procedencia"></div>
+    <div class="panel" style="margin-top:0;background:rgba(255,255,255,.04)">
+      <h3 class="section-title">Secciones a restaurar</h3>
+      <div class="checkbox-grid">
+        <label class="checkline"><input type="checkbox" name="restore_users" checked> Usuarios, roles y permisos</label>
+        <label class="checkline"><input type="checkbox" name="restore_families" checked> Familias</label>
+        <label class="checkline"><input type="checkbox" name="restore_prices" checked> Precios</label>
+        <label class="checkline"><input type="checkbox" name="restore_production" checked> Producción / etiquetas</label>
+        <label class="checkline"><input type="checkbox" name="restore_settings" checked> Configuración</label>
+      </div>
+    </div>
 
-  <div class="field"><label>Fecha balanza desde</label><input type="date" name="fecha_balanza_start" value="{{ request.args.get('fecha_balanza_start','') }}"></div>
-  <div class="field"><label>Fecha balanza hasta</label><input type="date" name="fecha_balanza_end" value="{{ request.args.get('fecha_balanza_end','') }}"></div>
+    <details class="panel" style="margin-top:0;background:rgba(255,85,114,.06);border-color:rgba(255,85,114,.22)">
+      <summary><strong>Opción peligrosa: borrar producción actual y reemplazarla</strong></summary>
+      <p class="muted">No uses esta opción salvo recuperación total. Lo normal es dejarla desmarcada para agregar solo los registros faltantes.</p>
+      <label class="checkline"><input type="checkbox" name="wipe_production"> Borrar toda la producción actual antes de importar producción del respaldo</label>
+      <div class="field" style="margin-top:10px">
+        <label>Confirmación adicional para borrar producción</label>
+        <input type="text" name="confirm_wipe_production" placeholder="Solo si marcas la opción: BORRAR PRODUCCION">
+      </div>
+    </details>
 
-  <button class="btn">Filtrar</button>
-  <a class="btn secondary" href="{{ url_for('production_view') }}">Limpiar</a>
-</form>
+    <div class="actions-inline">
+      <button class="btn danger" type="submit">Subir y restaurar respaldo</button>
+    </div>
+  </form>
+</section>
 
 <section class="panel">
-  <h2>Importar / exportar datos</h2>
+  <h2>Últimos movimientos</h2>
   <div class="row">
     <div>
-      <h3 class="section-title">Importar datos anteriores</h3>
-      <form class="filters" method="post" action="{{ url_for('production_import_csv') }}" enctype="multipart/form-data">
-        <input type="file" name="file" accept=".csv,.xlsx,.xls" class="input" style="max-width:460px" required>
-        <button class="btn secondary">Importar datos</button>
-      </form>
-      <p class="muted">Acepta el historial antiguo <strong>historial_etiquetas.csv</strong> y también archivos Excel exportados desde esta plataforma. El sistema evita duplicados por UUID/hash.</p>
+      <h3 class="section-title">Último respaldo descargado</h3>
+      {% if last_backup %}
+        <p><strong>{{ last_backup.created_at|cldt }}</strong> por {{ last_backup.actor }} · {{ last_backup.detail }}</p>
+      {% else %}
+        <p class="muted">Todavía no hay respaldos descargados desde este panel.</p>
+      {% endif %}
     </div>
     <div>
-      <h3 class="section-title">Exportar datos filtrados</h3>
-      <div class="filters">
-        <a class="btn" href="{{ url_for('production_export_xlsx', **request.args) }}">Exportar Excel</a>
-        <a class="btn secondary" href="{{ url_for('production_export_csv', **request.args) }}">Exportar CSV</a>
-      </div>
-      <p class="muted">La exportación respeta todos los filtros aplicados: usuario, terminal, familia, modo, precio, peso, código, descripción, IDX valor kilo, IN y fecha balanza.</p>
+      <h3 class="section-title">Última restauración</h3>
+      {% if last_restore %}
+        <p><strong>{{ last_restore.created_at|cldt }}</strong> por {{ last_restore.actor }} · {{ last_restore.detail[:240] }}...</p>
+      {% else %}
+        <p class="muted">Todavía no hay restauraciones registradas.</p>
+      {% endif %}
     </div>
   </div>
 </section>
 
-<section class="panel">
-  <h2>Datos consolidados</h2>
-  <p class="muted">El filtro <strong>IDX valor kilo</strong> busca solo el inicio del campo IDX, antes del código de usuario y terminal. Ejemplo: si el IDX es <strong>10.50 GS T1</strong>, puedes filtrar por <strong>10</strong>, <strong>10.5</strong> o <strong>10.50</strong>.</p>
-  <input class="input" id="quickFilter" placeholder="Filtro rápido tipo Excel..." style="margin-bottom:12px">
-  <div class="table-wrap">
-    <table id="dataTable">
-      <thead>
-        <tr>
-          <th>Fecha</th><th>Usuario</th><th>Terminal</th><th>Familia</th><th>Modo</th><th>Precio</th><th>Peso</th><th>Código</th><th>Descripción</th><th>IDX</th><th>IN</th><th>Fecha balanza</th><th>Hora</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in rows %}
-        <tr>
-          <td>{{ r.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td><td>{{ r.usuario }}</td><td>{{ r.terminal }}</td><td>{{ r.familia }}</td><td>{{ r.modo_impresion }}</td><td>{{ r.precio_int|clp }}</td><td>{{ r.peso_kg|kg }}</td><td>{{ r.codigo_producto }}</td><td>{{ r.descripcion }}</td><td>{{ r.idx }}</td><td>{{ r.in_desc }}</td><td>{{ r.fecha_balanza }}</td><td>{{ r.hora_balanza }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+<section class="panel warning-box">
+  <h2>Regla para no perder datos al actualizar</h2>
+  <p>Las actualizaciones de software deben reemplazar código, plantillas y archivos estáticos, pero no deben cambiar la variable <strong>DATABASE_URL</strong> ni eliminar la base PostgreSQL de Render.</p>
+  <ul>
+    <li>No borres la base PostgreSQL en Render.</li>
+    <li>No cambies el <strong>DATABASE_URL</strong> por una base nueva si quieres conservar la información.</li>
+    <li>No agregues código con <code>drop_all()</code>, eliminación masiva o reinicio de tablas.</li>
+    <li><code>db.create_all()</code> solo crea tablas faltantes; no borra datos existentes.</li>
+  </ul>
 </section>
-<script>
-const f=document.getElementById('quickFilter');
-const rows=[...document.querySelectorAll('#dataTable tbody tr')];
-f?.addEventListener('input',()=>{const q=f.value.toLowerCase();rows.forEach(r=>{r.style.display=r.innerText.toLowerCase().includes(q)?'':'none'})});
-</script>
 {% endblock %}

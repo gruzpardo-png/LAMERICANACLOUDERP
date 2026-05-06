@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block header %}Consulta producción{% endblock %}
+{% block content %}
+<form class="panel filters" method="get">
+  <div class="field"><label>Desde</label><input type="date" name="start" value="{{ request.args.get('start','') }}"></div>
+  <div class="field"><label>Hasta</label><input type="date" name="end" value="{{ request.args.get('end','') }}"></div>
+  <div class="field"><label>Usuario</label><select name="usuario"><option value="">Todos</option>{% for u in users %}<option value="{{ u.username }}" {% if request.args.get('usuario')==u.username %}selected{% endif %}>{{ u.username }} · {{ u.code }}</option>{% endfor %}</select></div>
+  <div class="field"><label>Terminal</label><select name="terminal"><option value="">Todas</option>{% for t in terminals %}<option value="{{ t }}" {% if request.args.get('terminal')==t %}selected{% endif %}>{{ t }}</option>{% endfor %}</select></div>
+  <div class="field"><label>Familia</label><select name="familia"><option value="">Todas</option>{% for f in families %}<option value="{{ f.name }}" {% if request.args.get('familia')==f.name %}selected{% endif %}>{{ f.display_name }}</option>{% endfor %}</select></div>
+  <div class="field"><label>Modo</label><select name="modo"><option value="">Todos</option>{% for m in modos %}<option value="{{ m }}" {% if request.args.get('modo')==m %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
+  <div class="field"><label>Conteo</label><select name="count_filter"><option value="all" {% if request.args.get('count_filter','all')=='all' %}selected{% endif %}>Todas</option><option value="countable" {% if request.args.get('count_filter')=='countable' %}selected{% endif %}>Solo cuantificables</option><option value="replicas" {% if request.args.get('count_filter')=='replicas' %}selected{% endif %}>Solo réplicas</option><option value="no_cuenta" {% if request.args.get('count_filter')=='no_cuenta' %}selected{% endif %}>No cuentan</option></select></div>
+  <div class="field"><label>Precio desde</label><input name="precio_min" value="{{ request.args.get('precio_min','') }}" placeholder="$ mínimo"></div>
+  <div class="field"><label>Precio hasta</label><input name="precio_max" value="{{ request.args.get('precio_max','') }}" placeholder="$ máximo"></div>
+  <div class="field"><label>Peso desde</label><input name="peso_min" value="{{ request.args.get('peso_min','') }}" placeholder="kg mínimo"></div>
+  <div class="field"><label>Peso hasta</label><input name="peso_max" value="{{ request.args.get('peso_max','') }}" placeholder="kg máximo"></div>
+  <div class="field"><label>Código</label><input name="codigo" value="{{ request.args.get('codigo','') }}" placeholder="Código producto"></div>
+  <div class="field"><label>Descripción</label><input name="descripcion" value="{{ request.args.get('descripcion','') }}" placeholder="Texto descripción"></div>
+  <div class="field"><label>IDX valor kilo</label><input name="idx_kilo" value="{{ request.args.get('idx_kilo','') }}" placeholder="Ej: 10.50"></div>
+  <div class="field"><label>IN</label><input name="in" value="{{ request.args.get('in','') }}" placeholder="Producción / procedencia"></div>
+  <div class="field"><label>Lote</label><input name="batch" value="{{ request.args.get('batch','') }}" placeholder="Código/nombre lote"></div>
+  <div class="field"><label>Fecha balanza desde</label><input type="date" name="fecha_balanza_start" value="{{ request.args.get('fecha_balanza_start','') }}"></div>
+  <div class="field"><label>Fecha balanza hasta</label><input type="date" name="fecha_balanza_end" value="{{ request.args.get('fecha_balanza_end','') }}"></div>
+  <button class="btn">Filtrar</button>
+  <a class="btn secondary" href="{{ url_for('production_view') }}">Limpiar</a>
+</form>
+<section class="panel">
+  <h2>Importar / exportar datos</h2>
+  <div class="row">
+    <div><h3 class="section-title">Importar datos anteriores</h3><form class="filters" method="post" action="{{ url_for('production_import_csv') }}" enctype="multipart/form-data"><input type="file" name="file" accept=".csv,.xlsx,.xls" class="input" style="max-width:460px" required><button class="btn secondary">Importar datos</button></form><p class="muted">Acepta historial antiguo CSV y Excel exportado. Evita duplicados por UUID/hash.</p></div>
+    <div><h3 class="section-title">Exportar datos filtrados</h3><div class="filters"><a class="btn" href="{{ url_for('production_export_xlsx', **request.args) }}">Exportar Excel</a><a class="btn secondary" href="{{ url_for('production_export_csv', **request.args) }}">Exportar CSV</a></div><p class="muted">La exportación respeta filtros, incluyendo conteo: todas, cuantificables o réplicas.</p></div>
+  </div>
+</section>
+<section class="panel">
+  <h2>Datos consolidados</h2>
+  <p class="muted"><strong>Conteo</strong>: Cuenta suma en dashboard. Réplica queda visible pero no suma monto, kilos ni productividad. La regla de réplica no aplica a zapatillas/calzado.</p>
+  <input class="input" id="quickFilter" placeholder="Filtro rápido tipo Excel..." style="margin-bottom:12px">
+  <div class="table-wrap"><table id="dataTable"><thead><tr><th>Fecha</th><th>Conteo</th><th>Usuario</th><th>Terminal</th><th>Familia</th><th>Modo</th><th>Precio</th><th>Peso</th><th>Código</th><th>Descripción</th><th>IDX</th><th>IN</th><th>Lote</th><th>Fecha balanza</th><th>Hora</th><th>Motivo</th></tr></thead><tbody>
+    {% for r in rows %}<tr class="{% if r._calc_count_status == 'Réplica' %}row-warning{% endif %}"><td>{{ r.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td><td><span class="badge {% if r._calc_count_status == 'Réplica' %}warn{% else %}ok{% endif %}">{{ r._calc_count_status }}</span></td><td>{{ r.usuario }}</td><td>{{ r.terminal }}</td><td>{{ r.familia }}</td><td>{{ r.modo_impresion }}</td><td>{{ r.precio_int|clp }}</td><td>{{ r.peso_kg|kg }}</td><td>{{ r.codigo_producto }}</td><td>{{ r.descripcion }}</td><td>{{ r.idx }}</td><td>{{ r.in_desc }}</td><td>{{ r.batch_code }} {{ r.batch_name }}</td><td>{{ r.fecha_balanza }}</td><td>{{ r.hora_balanza }}</td><td>{{ r._calc_duplicate_reason }}</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+<script>
+const f=document.getElementById('quickFilter');
+const rows=[...document.querySelectorAll('#dataTable tbody tr')];
+f?.addEventListener('input',()=>{const q=f.value.toLowerCase();rows.forEach(r=>{r.style.display=r.innerText.toLowerCase().includes(q)?'':'none'})});
+</script>
+{% endblock %}

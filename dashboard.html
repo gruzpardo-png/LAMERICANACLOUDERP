@@ -1,24 +1,30 @@
-{% extends "base.html" %}
-{% block header %}Dashboard producción{% endblock %}
-{% block content %}
-<form class="panel filters" method="get">
-  <div class="field"><label>Desde</label><input type="date" name="start" value="{{ request.args.get('start','') }}"></div>
-  <div class="field"><label>Hasta</label><input type="date" name="end" value="{{ request.args.get('end','') }}"></div>
-  <div class="field"><label>Familia</label><select name="familia"><option value="">Todas</option>{% for f in families %}<option value="{{ f.name }}" {% if request.args.get('familia')==f.name %}selected{% endif %}>{{ f.display_name }}</option>{% endfor %}</select></div>
-  <div class="field"><label>IN / Producción</label><input name="in" value="{{ request.args.get('in','') }}" placeholder="Ej: TA, BALA, MIX"></div>
-  <div class="field"><label>Usuario</label><select name="usuario"><option value="">Todos</option>{% for u in users %}<option value="{{ u.username }}" {% if request.args.get('usuario')==u.username %}selected{% endif %}>{{ u.username }}</option>{% endfor %}</select></div>
-  <div class="field"><label>Terminal</label><select name="terminal"><option value="">Todas</option>{% for t in terminals %}<option value="{{ t }}" {% if request.args.get('terminal')==t %}selected{% endif %}>{{ t }}</option>{% endfor %}</select></div>
-  <button class="btn">Filtrar</button><a class="btn secondary" href="{{ url_for('dashboard') }}">Limpiar</a>
-</form>
-<div class="grid cards">
-  <div class="card"><div class="metric-label">Etiquetas reales</div><div class="metric">{{ totals.raw_labels }}</div><div class="muted">Incluye etiquetas sueltas.</div></div>
-  <div class="card"><div class="metric-label">Unidades dashboard</div><div class="metric">{{ totals.units }}</div><div class="muted">Zapatillas: 2 etiquetas = 1 unidad.</div></div>
-  <div class="card"><div class="metric-label">Monto producido</div><div class="metric">{{ totals.amount|clp }}</div><div class="muted">Zapatillas sueltas no suman.</div></div>
-  <div class="card"><div class="metric-label">Kilos producidos</div><div class="metric">{{ totals.kg|kg }}</div><div class="muted">Suma corregida por pares.</div></div>
-</div>
-<div class="row">
-  <section class="panel"><h2>Resumen por día</h2><div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Etiquetas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_date|reverse %}<tr><td>{{ r.key }}</td><td>{{ r.raw_labels }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div></section>
-  <section class="panel"><h2>Resumen por IN / descripción producción</h2><div class="table-wrap"><table><thead><tr><th>IN</th><th>Etiquetas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_in %}<tr><td>{{ r.key }}</td><td>{{ r.raw_labels }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div></section>
-</div>
-<section class="panel"><h2>Resumen por familia</h2><div class="table-wrap"><table><thead><tr><th>Familia</th><th>Etiquetas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_family %}<tr><td>{{ r.key }}</td><td>{{ r.raw_labels }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div></section>
-{% endblock %}
+:root{
+  --bg:#07111f;
+  --panel:#0e1b2e;
+  --panel2:#111f35;
+  --muted:#93a4bd;
+  --text:#eaf2ff;
+  --accent:#00d1ff;
+  --accent2:#6d5dfc;
+  --ok:#18d26e;
+  --warn:#ffb020;
+  --danger:#ff5572;
+  --border:rgba(255,255,255,.10);
+  --shadow:0 18px 55px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at 20% 0%,rgba(0,209,255,.16),transparent 32%),radial-gradient(circle at 80% 20%,rgba(109,93,252,.18),transparent 28%),var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif;min-height:100vh}
+a{color:var(--accent);text-decoration:none}.layout{display:flex;min-height:100vh}.sidebar{width:270px;background:rgba(9,18,32,.92);backdrop-filter: blur(14px);border-right:1px solid var(--border);padding:24px 18px;position:sticky;top:0;height:100vh}.brand{font-weight:900;letter-spacing:.08em;text-transform:uppercase;font-size:18px;line-height:1.15}.brand small{display:block;color:var(--muted);font-size:11px;margin-top:6px;letter-spacing:.14em}.nav{margin-top:28px;display:grid;gap:8px}.nav a{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:16px;color:#d9e8ff;border:1px solid transparent}.nav a:hover,.nav a.active{background:linear-gradient(135deg,rgba(0,209,255,.14),rgba(109,93,252,.10));border-color:rgba(0,209,255,.22)}.sidebar-footer{position:absolute;left:18px;right:18px;bottom:18px;color:var(--muted);font-size:11px;letter-spacing:.12em;text-transform:uppercase}.main{flex:1;padding:26px 30px 50px}.topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}.h1{font-size:28px;font-weight:900;letter-spacing:-.03em;margin:0}.sub{color:var(--muted);font-size:14px;margin-top:5px}.user-pill{border:1px solid var(--border);border-radius:999px;padding:10px 14px;background:rgba(255,255,255,.04);color:var(--muted)}.grid{display:grid;gap:16px}.cards{grid-template-columns:repeat(4,minmax(0,1fr))}.card{background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.025));border:1px solid var(--border);border-radius:24px;padding:18px;box-shadow:var(--shadow)}.metric-label{color:var(--muted);font-size:13px;text-transform:uppercase;letter-spacing:.08em}.metric{font-size:30px;font-weight:900;margin-top:8px}.metric small{font-size:14px;color:var(--muted)}.panel{background:rgba(14,27,46,.82);border:1px solid var(--border);border-radius:24px;padding:18px;box-shadow:var(--shadow);margin-top:16px}.panel h2{font-size:18px;margin:0 0 14px 0}.filters{display:flex;flex-wrap:wrap;gap:10px;align-items:end}.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}.input,select,input[type="date"],input[type="text"],input[type="password"],input[type="number"],textarea{width:100%;background:#081426;color:var(--text);border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:10px 12px;outline:none}.input:focus,select:focus,input:focus,textarea:focus{border-color:rgba(0,209,255,.65);box-shadow:0 0 0 4px rgba(0,209,255,.08)}.btn{border:none;border-radius:14px;padding:10px 14px;color:#03111f;background:linear-gradient(135deg,var(--accent),#7ee7ff);font-weight:800;cursor:pointer}.btn.secondary{color:var(--text);background:rgba(255,255,255,.08);border:1px solid var(--border)}.btn.danger{background:linear-gradient(135deg,var(--danger),#ff98aa)}.table-wrap{overflow:auto;border-radius:18px;border:1px solid var(--border)}table{width:100%;border-collapse:collapse;min-width:860px}th,td{padding:11px 12px;border-bottom:1px solid rgba(255,255,255,.08);font-size:13px;vertical-align:top}th{position:sticky;top:0;background:#0b182a;color:#bcd1ec;text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.07em}tr:hover td{background:rgba(255,255,255,.035)}.flash{padding:12px 14px;border-radius:14px;margin:10px 0;border:1px solid var(--border)}.flash.success{background:rgba(24,210,110,.12);color:#a7ffc8}.flash.error{background:rgba(255,85,114,.12);color:#ffd1d9}.login-wrap{display:grid;place-items:center;min-height:100vh;padding:20px}.login-card{width:min(450px,94vw);background:rgba(14,27,46,.88);border:1px solid var(--border);border-radius:28px;padding:30px;box-shadow:var(--shadow)}.login-card .brand{font-size:23px;margin-bottom:24px}.row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.row3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.badge{display:inline-flex;border:1px solid var(--border);background:rgba(255,255,255,.06);border-radius:999px;padding:5px 9px;color:var(--muted);font-size:12px}.status-ok{color:var(--ok)}.status-pending{color:var(--warn)}.muted{color:var(--muted)}.checkbox-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.checkline{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:13px}.section-title{margin:18px 0 10px;font-size:14px;color:#bfd7f4;text-transform:uppercase;letter-spacing:.08em}.kpi-line{display:flex;gap:12px;flex-wrap:wrap}.kpi-line .badge strong{color:#fff;margin-left:5px}@media(max-width:900px){.layout{display:block}.sidebar{width:100%;height:auto;position:relative}.sidebar-footer{position:relative;left:auto;right:auto;bottom:auto;margin-top:20px}.cards{grid-template-columns:1fr 1fr}.row,.row3{grid-template-columns:1fr}.main{padding:18px}.topbar{display:block}.user-pill{display:inline-block;margin-top:12px}}@media(max-width:560px){.cards{grid-template-columns:1fr}}
+.actions-inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.actions-inline form{margin:0}.btn[disabled]{opacity:.45;cursor:not-allowed}.panel h3.section-title{margin-top:0}
+
+.warning-box{border:1px solid rgba(245,158,11,.35);background:linear-gradient(180deg,rgba(245,158,11,.10),rgba(255,255,255,.03));}
+.warning-box code{background:rgba(0,0,0,.20);padding:2px 6px;border-radius:6px;}
+.badge.ok{background:rgba(24,210,110,.14);color:#a7ffc8;border-color:rgba(24,210,110,.28)}
+.badge.warn{background:rgba(255,176,32,.14);color:#ffdca3;border-color:rgba(255,176,32,.28)}
+.row-warning td{background:rgba(255,176,32,.065)}
+.total-row td{background:rgba(0,209,255,.06);font-weight:800}
+table.dense th, table.dense td{font-size:12px;padding:8px 9px}
+.small-muted{font-size:12px;color:var(--muted)}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:900px){.two-col{grid-template-columns:1fr}}
+.inline-edit{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.table.compact td,.table.compact th{font-size:12px}.btn.small{padding:7px 10px;font-size:12px}.btn.danger{background:#ff6680;color:#08111f}.metric{font-size:28px;font-weight:800;color:#67e8f9}.muted{color:#9fb5cc}.check{display:flex;align-items:center;gap:6px}

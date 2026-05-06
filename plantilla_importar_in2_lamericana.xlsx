@@ -1,0 +1,9 @@
+# Instalador software local La Americana Label Cloud
+
+1. Ejecuta `crear_instalador_pyinstaller.bat` en un PC Windows con Python instalado.
+2. El EXE quedará en `dist_instalador/LAMERICANA_LabelCloud.exe`.
+3. Para crear instalador formal, instala Inno Setup y compila `LAMERICANA_LabelCloud_Setup.iss`.
+4. La carpeta recomendada de instalación es `C:\Program Files\LAMERICANA\LabelCloud`.
+5. La base local `lamericana_terminal.sqlite3` se genera en la carpeta donde corre el programa. No la borres al actualizar.
+
+Para actualización del software local: reemplaza solo el `.exe` o `.py`. No borres `lamericana_terminal.sqlite3`, `terminal_config.json` ni la carpeta `logs`.

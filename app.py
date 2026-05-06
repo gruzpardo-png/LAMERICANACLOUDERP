@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import zipfile
+import requests
 from datetime import datetime, date, timedelta, timezone
 from functools import wraps
 
@@ -28,12 +29,16 @@ from flask import (
     make_response,
 )
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func, inspect, text
+from sqlalchemy import func, inspect, text, or_
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+
+UPLOAD_DIR = os.path.join(BASE_DIR, "static", "uploads", "marketing")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-change-this-secret-key")
@@ -215,6 +220,254 @@ def inject_timezone_context():
         "now_chile": chile_now,
     }
 
+
+
+# =========================================================
+# Marketing / CRM helpers
+# =========================================================
+
+def safe_text(value, max_len=None):
+    s = str(value or "").strip()
+    if max_len and len(s) > max_len:
+        s = s[:max_len]
+    return s
+
+
+def allowed_image(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
+
+
+def public_file_url(filename):
+    if not filename:
+        return ""
+    base_url = os.getenv("PUBLIC_BASE_URL") or request.host_url.rstrip("/")
+    return f"{base_url}/static/uploads/marketing/{filename}"
+
+
+def credential_value(key, default=""):
+    # Prioridad: variable de entorno; después Setting guardado en configuración.
+    env_val = os.getenv(key)
+    if env_val:
+        return env_val
+    try:
+        rec = Setting.query.get(key.lower())
+        if rec and rec.value:
+            return rec.value
+    except Exception:
+        pass
+    return default
+
+
+def parse_openai_json(text_value):
+    raw = (text_value or "").strip()
+    if not raw:
+        return {}
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?", "", raw).strip()
+        raw = re.sub(r"```$", "", raw).strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        # Intentar extraer primer objeto JSON.
+        m = re.search(r"\{.*\}", raw, re.S)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                pass
+    return {"raw_text": text_value}
+
+
+def campaign_fallback_payload(title, category, objective, tone, extra_context=""):
+    hashtags = "#LaAmericana #RopaAmericana #Quillota #ModaCircular #Zapatillas #Vestuario #Hogar #Bolsos"
+    base = (
+        f"✨ {title or 'Novedades en La Americana'}\n\n"
+        f"Encuentra productos americanos seleccionados en {category or 'nuestras tiendas'}. "
+        "La disponibilidad cambia durante el día, por eso te recomendamos visitarnos o escribir por WhatsApp para orientación general.\n\n"
+        "📍 Te esperamos en La Americana.\n"
+        "📲 Consulta por WhatsApp."
+    )
+    return {
+        "facebook_post": base,
+        "facebook_story": f"{title or 'Novedades'}\nVen a La Americana. Productos únicos según disponibilidad.",
+        "instagram_post": base + "\n\n" + hashtags,
+        "instagram_story": f"🔥 {title or 'Novedades'}\nProductos únicos en tienda.\nEscríbenos o visítanos.",
+        "whatsapp_status": f"{title or 'Novedades en La Americana'}\nProductos americanos seleccionados. Disponibilidad variable.",
+        "whatsapp_broadcast": f"Hola 👋 Tenemos novedades en {category or 'La Americana'}. La disponibilidad cambia rápido, te recomendamos visitarnos o escribir para orientación general.",
+        "tiktok_post": f"Guion: muestra la tienda, enfoca los productos, agrega texto en pantalla: {title or 'Novedades en La Americana'}, termina con llamado a visitar la tienda.",
+        "tiktok_story": f"{title or 'Novedades'} · Visítanos hoy",
+        "hashtags": hashtags,
+        "cta": "Escríbenos por WhatsApp o visítanos en tienda.",
+        "segment": category or "Clientes generales de La Americana",
+        "risk_notes": "No confirmar stock exacto ni prometer disponibilidad específica.",
+    }
+
+
+def generate_marketing_ai_payload(campaign, image_url="", user_notes=""):
+    knowledge = "\\n".join([f"- {k.title}: {k.content}" for k in KnowledgeBase.query.filter_by(active=True).limit(20).all()])
+    promotions = "\\n".join([f"- {p.name}: {p.description} ({p.discount_text})" for p in Promotion.query.filter_by(active=True).limit(20).all()])
+    key = os.getenv("OPENAI_API_KEY")
+    model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+    fallback = campaign_fallback_payload(campaign.title, campaign.category, campaign.objective, campaign.tone, user_notes)
+    if not key:
+        fallback["risk_notes"] += " OPENAI_API_KEY no configurada; texto generado en modo fallback."
+        return fallback
+
+    prompt = f"""
+Responde SOLO como JSON válido, sin markdown.
+Eres el agente profesional de marketing de La Americana, tienda de productos americanos seleccionados.
+Crea textos listos para publicar, sin inventar stock exacto ni prometer disponibilidad.
+La foto la sube el usuario y puede o no estar disponible como URL pública.
+
+Datos campaña:
+- Título: {campaign.title}
+- Categoría: {campaign.category}
+- Familia: {campaign.family}
+- Tienda: {campaign.store}
+- Objetivo: {campaign.objective}
+- Canal principal: {campaign.primary_channel}
+- Tono: {campaign.tone}
+- Promoción: {campaign.promotion_text}
+- Precio desde: {campaign.price_from}
+- Observaciones usuario: {user_notes}
+- URL imagen: {image_url}
+
+Base de conocimiento:
+{knowledge or "- Sin base de conocimiento cargada."}
+
+Promociones activas:
+{promotions or "- Sin promociones activas cargadas."}
+
+Devuelve JSON con claves exactas:
+facebook_post, facebook_story, instagram_post, instagram_story, whatsapp_status, whatsapp_broadcast,
+tiktok_post, tiktok_story, hashtags, cta, segment, risk_notes.
+"""
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/responses",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={
+                "model": model,
+                "input": prompt,
+                "temperature": 0.7,
+            },
+            timeout=45,
+        )
+        response.raise_for_status()
+        data = response.json()
+        output_text = data.get("output_text", "")
+        if not output_text:
+            parts = []
+            for item in data.get("output", []):
+                for content in item.get("content", []):
+                    if content.get("type") in ("output_text", "text"):
+                        parts.append(content.get("text", ""))
+            output_text = "\\n".join(parts)
+        parsed = parse_openai_json(output_text)
+        if not parsed or "raw_text" in parsed:
+            fallback["risk_notes"] += " La IA no devolvió JSON limpio; se usó texto base."
+            if parsed.get("raw_text"):
+                fallback["facebook_post"] = parsed["raw_text"]
+                fallback["instagram_post"] = parsed["raw_text"]
+            return fallback
+        for key_name, value in fallback.items():
+            parsed.setdefault(key_name, value)
+        return parsed
+    except Exception as exc:
+        fallback["risk_notes"] += f" Error OpenAI: {exc}"
+        return fallback
+
+
+def post_to_facebook_page(campaign, post):
+    token = credential_value("META_PAGE_ACCESS_TOKEN")
+    page_id = credential_value("META_PAGE_ID")
+    graph_version = credential_value("META_GRAPH_VERSION", "v20.0")
+    if not token or not page_id:
+        return False, "Faltan META_PAGE_ID o META_PAGE_ACCESS_TOKEN."
+    caption = post.content or campaign.facebook_post or campaign.instagram_post or campaign.title
+    image_url = campaign.image_url
+    try:
+        if image_url:
+            url = f"https://graph.facebook.com/{graph_version}/{page_id}/photos"
+            payload = {"url": image_url, "caption": caption, "access_token": token, "published": "true"}
+        else:
+            url = f"https://graph.facebook.com/{graph_version}/{page_id}/feed"
+            payload = {"message": caption, "access_token": token}
+        r = requests.post(url, data=payload, timeout=30)
+        data = r.json()
+        if r.status_code >= 400 or data.get("error"):
+            return False, json.dumps(data, ensure_ascii=False)
+        return True, json.dumps(data, ensure_ascii=False)
+    except Exception as exc:
+        return False, str(exc)
+
+
+def post_to_instagram(campaign, post, media_type="IMAGE"):
+    token = credential_value("IG_ACCESS_TOKEN") or credential_value("META_PAGE_ACCESS_TOKEN")
+    ig_user_id = credential_value("IG_USER_ID")
+    graph_version = credential_value("META_GRAPH_VERSION", "v20.0")
+    if not token or not ig_user_id:
+        return False, "Faltan IG_USER_ID e IG_ACCESS_TOKEN/META_PAGE_ACCESS_TOKEN."
+    if not campaign.image_url:
+        return False, "Instagram requiere imagen/video accesible por URL pública."
+    caption = post.content or campaign.instagram_post or campaign.title
+    try:
+        params = {"image_url": campaign.image_url, "caption": caption, "access_token": token}
+        if media_type == "STORIES":
+            params["media_type"] = "STORIES"
+        create = requests.post(f"https://graph.facebook.com/{graph_version}/{ig_user_id}/media", data=params, timeout=30)
+        create_data = create.json()
+        if create.status_code >= 400 or create_data.get("error") or not create_data.get("id"):
+            return False, json.dumps(create_data, ensure_ascii=False)
+        publish = requests.post(
+            f"https://graph.facebook.com/{graph_version}/{ig_user_id}/media_publish",
+            data={"creation_id": create_data["id"], "access_token": token},
+            timeout=30,
+        )
+        pub_data = publish.json()
+        if publish.status_code >= 400 or pub_data.get("error"):
+            return False, json.dumps(pub_data, ensure_ascii=False)
+        return True, json.dumps(pub_data, ensure_ascii=False)
+    except Exception as exc:
+        return False, str(exc)
+
+
+def send_whatsapp_template(contact, campaign):
+    token = credential_value("WHATSAPP_ACCESS_TOKEN")
+    phone_number_id = credential_value("WHATSAPP_PHONE_NUMBER_ID")
+    template_name = credential_value("WHATSAPP_TEMPLATE_MARKETING")
+    graph_version = credential_value("META_GRAPH_VERSION", "v20.0")
+    if not token or not phone_number_id or not template_name:
+        return False, "Faltan WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID o WHATSAPP_TEMPLATE_MARKETING."
+    if not contact.phone:
+        return False, "Contacto sin teléfono."
+    phone = re.sub(r"[^0-9]", "", contact.phone)
+    body_text = campaign.whatsapp_broadcast or campaign.title
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": credential_value("WHATSAPP_TEMPLATE_LANG", "es_CL")},
+            "components": [
+                {"type": "body", "parameters": [{"type": "text", "text": body_text[:900]}]}
+            ],
+        },
+    }
+    try:
+        r = requests.post(
+            f"https://graph.facebook.com/{graph_version}/{phone_number_id}/messages",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=30,
+        )
+        data = r.json()
+        if r.status_code >= 400 or data.get("error"):
+            return False, json.dumps(data, ensure_ascii=False)
+        return True, json.dumps(data, ensure_ascii=False)
+    except Exception as exc:
+        return False, str(exc)
 
 # =========================================================
 # Models
@@ -468,6 +721,145 @@ class InEntry(db.Model):
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
+
+class KnowledgeBase(db.Model):
+    __tablename__ = "knowledge_base"
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(160), nullable=False, default="")
+    category = db.Column(db.String(80), nullable=False, default="general", index=True)
+    content = db.Column(db.Text, nullable=False, default="")
+    active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_by = db.Column(db.String(80), nullable=False, default="")
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class Promotion(db.Model):
+    __tablename__ = "promotions"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(160), nullable=False, default="")
+    description = db.Column(db.Text, nullable=False, default="")
+    family = db.Column(db.String(80), nullable=False, default="", index=True)
+    category = db.Column(db.String(120), nullable=False, default="")
+    store = db.Column(db.String(120), nullable=False, default="")
+    discount_text = db.Column(db.String(120), nullable=False, default="")
+    starts_at = db.Column(db.Date)
+    ends_at = db.Column(db.Date)
+    active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_by = db.Column(db.String(80), nullable=False, default="")
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+
+class CRMContact(db.Model):
+    __tablename__ = "crm_contacts"
+    id = db.Column(db.Integer, primary_key=True)
+    full_name = db.Column(db.String(160), nullable=False, default="")
+    phone = db.Column(db.String(40), nullable=False, default="", index=True)
+    email = db.Column(db.String(160), nullable=False, default="")
+    instagram_user = db.Column(db.String(120), nullable=False, default="")
+    facebook_user = db.Column(db.String(120), nullable=False, default="")
+    city = db.Column(db.String(100), nullable=False, default="")
+    commune = db.Column(db.String(100), nullable=False, default="")
+    origin_channel = db.Column(db.String(80), nullable=False, default="", index=True)
+    status = db.Column(db.String(60), nullable=False, default="nuevo", index=True)
+    marketing_opt_in = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    notes = db.Column(db.Text, nullable=False, default="")
+    created_by = db.Column(db.String(80), nullable=False, default="")
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow, index=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class CRMLead(db.Model):
+    __tablename__ = "crm_leads"
+    id = db.Column(db.Integer, primary_key=True)
+    contact_id = db.Column(db.Integer, db.ForeignKey("crm_contacts.id"), nullable=True, index=True)
+    campaign_id = db.Column(db.Integer, db.ForeignKey("marketing_campaigns.id"), nullable=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow, index=True)
+    channel = db.Column(db.String(80), nullable=False, default="", index=True)
+    interest = db.Column(db.String(255), nullable=False, default="")
+    category = db.Column(db.String(120), nullable=False, default="", index=True)
+    family = db.Column(db.String(80), nullable=False, default="", index=True)
+    size = db.Column(db.String(80), nullable=False, default="")
+    product_requested = db.Column(db.String(255), nullable=False, default="")
+    store_preference = db.Column(db.String(120), nullable=False, default="")
+    urgency = db.Column(db.String(80), nullable=False, default="")
+    status = db.Column(db.String(80), nullable=False, default="nuevo", index=True)
+    next_action = db.Column(db.String(255), nullable=False, default="")
+    next_action_date = db.Column(db.Date)
+    assigned_to = db.Column(db.String(80), nullable=False, default="")
+    notes = db.Column(db.Text, nullable=False, default="")
+    contact = db.relationship("CRMContact", backref="leads")
+    campaign = db.relationship("MarketingCampaign", backref="leads")
+
+
+class CRMInteraction(db.Model):
+    __tablename__ = "crm_interactions"
+    id = db.Column(db.Integer, primary_key=True)
+    contact_id = db.Column(db.Integer, db.ForeignKey("crm_contacts.id"), nullable=True, index=True)
+    lead_id = db.Column(db.Integer, db.ForeignKey("crm_leads.id"), nullable=True, index=True)
+    campaign_id = db.Column(db.Integer, db.ForeignKey("marketing_campaigns.id"), nullable=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow, index=True)
+    channel = db.Column(db.String(80), nullable=False, default="")
+    type = db.Column(db.String(80), nullable=False, default="nota")
+    message_in = db.Column(db.Text, nullable=False, default="")
+    message_out = db.Column(db.Text, nullable=False, default="")
+    intent = db.Column(db.String(120), nullable=False, default="")
+    sentiment = db.Column(db.String(80), nullable=False, default="")
+    created_by = db.Column(db.String(80), nullable=False, default="")
+    contact = db.relationship("CRMContact", backref="interactions")
+    lead = db.relationship("CRMLead", backref="interactions")
+
+
+class MarketingCampaign(db.Model):
+    __tablename__ = "marketing_campaigns"
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(180), nullable=False, default="")
+    objective = db.Column(db.String(120), nullable=False, default="")
+    category = db.Column(db.String(120), nullable=False, default="", index=True)
+    family = db.Column(db.String(80), nullable=False, default="", index=True)
+    store = db.Column(db.String(120), nullable=False, default="")
+    primary_channel = db.Column(db.String(80), nullable=False, default="")
+    status = db.Column(db.String(80), nullable=False, default="borrador", index=True)
+    tone = db.Column(db.String(120), nullable=False, default="")
+    promotion_text = db.Column(db.String(255), nullable=False, default="")
+    price_from = db.Column(db.String(80), nullable=False, default="")
+    segment = db.Column(db.String(255), nullable=False, default="")
+    cta = db.Column(db.String(255), nullable=False, default="")
+    hashtags = db.Column(db.Text, nullable=False, default="")
+    risk_notes = db.Column(db.Text, nullable=False, default="")
+    image_filename = db.Column(db.String(255), nullable=False, default="")
+    image_url = db.Column(db.String(500), nullable=False, default="")
+    facebook_post = db.Column(db.Text, nullable=False, default="")
+    facebook_story = db.Column(db.Text, nullable=False, default="")
+    instagram_post = db.Column(db.Text, nullable=False, default="")
+    instagram_story = db.Column(db.Text, nullable=False, default="")
+    whatsapp_status = db.Column(db.Text, nullable=False, default="")
+    whatsapp_broadcast = db.Column(db.Text, nullable=False, default="")
+    tiktok_post = db.Column(db.Text, nullable=False, default="")
+    tiktok_story = db.Column(db.Text, nullable=False, default="")
+    prompt_input = db.Column(db.Text, nullable=False, default="")
+    metadata_json = db.Column(db.Text, nullable=False, default="{}")
+    created_by = db.Column(db.String(80), nullable=False, default="")
+    approved_by = db.Column(db.String(80), nullable=False, default="")
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow, index=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+    approved_at = db.Column(db.DateTime)
+
+
+class SocialPost(db.Model):
+    __tablename__ = "social_posts"
+    id = db.Column(db.Integer, primary_key=True)
+    campaign_id = db.Column(db.Integer, db.ForeignKey("marketing_campaigns.id"), nullable=False, index=True)
+    channel = db.Column(db.String(80), nullable=False, index=True)
+    content = db.Column(db.Text, nullable=False, default="")
+    status = db.Column(db.String(80), nullable=False, default="borrador", index=True)
+    external_id = db.Column(db.String(180), nullable=False, default="")
+    last_error = db.Column(db.Text, nullable=False, default="")
+    published_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    campaign = db.relationship("MarketingCampaign", backref="posts")
+
+
 class ApiSession(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     token_hash = db.Column(db.String(128), unique=True, nullable=False, index=True)
@@ -573,6 +965,8 @@ DEFAULT_PERMISSIONS = {
     "connect_scale": True,
     "manage_terminals": False,
     "manage_backups": False,
+    "manage_marketing": False,
+    "manage_crm": False,
 }
 
 
@@ -646,6 +1040,9 @@ def seed_database():
         "duplicate_detection_seconds": "5",
         "duplicate_families": "vestuario,hogar,bolsos",
         "logs_visible": "1",
+        "marketing_brand_voice": "Formal, cercano, comercial, chileno, enfocado en visitas a tienda y WhatsApp.",
+        "sales_agent_rules": "No inventar stock exacto. No prometer disponibilidad. No reservar sin sistema. Guardar interés en CRM.",
+        "PUBLIC_BASE_URL": "https://cloud.lamericana.cl",
     }.items():
         if not Setting.query.get(key):
             db.session.add(Setting(key=key, value=val))
@@ -1430,6 +1827,33 @@ def backup_snapshot():
     price_history = [{"id": h.id, "family": h.family, "product_code": h.product_code, "description": h.description, "old_price": h.old_price, "new_price": h.new_price, "action": h.action, "actor": h.actor, "source": h.source, "created_at": iso_dt(h.created_at)} for h in PriceHistory.query.order_by(PriceHistory.created_at.desc()).limit(10000).all()]
     batches = [{"code": b.code, "name": b.name, "in_desc": b.in_desc, "family": b.family, "active": b.active, "created_by": b.created_by, "created_at": iso_dt(b.created_at), "closed_at": iso_dt(b.closed_at)} for b in ProductionBatch.query.order_by(ProductionBatch.created_at.desc()).all()]
     in_entries = [e.to_api() for e in InEntry.query.order_by(InEntry.source_type.asc(), InEntry.family.asc(), InEntry.value.asc()).all()]
+    campaigns = [
+        {
+            "id": c.id, "title": c.title, "objective": c.objective, "category": c.category, "family": c.family,
+            "store": c.store, "primary_channel": c.primary_channel, "status": c.status, "tone": c.tone,
+            "promotion_text": c.promotion_text, "price_from": c.price_from, "segment": c.segment,
+            "cta": c.cta, "hashtags": c.hashtags, "image_url": c.image_url,
+            "facebook_post": c.facebook_post, "instagram_post": c.instagram_post,
+            "whatsapp_broadcast": c.whatsapp_broadcast, "tiktok_post": c.tiktok_post,
+            "created_by": c.created_by, "created_at": iso_dt(c.created_at),
+        } for c in MarketingCampaign.query.order_by(MarketingCampaign.created_at.desc()).limit(10000).all()
+    ]
+    crm_contacts = [
+        {
+            "id": c.id, "full_name": c.full_name, "phone": c.phone, "email": c.email,
+            "instagram_user": c.instagram_user, "facebook_user": c.facebook_user,
+            "origin_channel": c.origin_channel, "status": c.status,
+            "marketing_opt_in": c.marketing_opt_in, "notes": c.notes, "created_at": iso_dt(c.created_at),
+        } for c in CRMContact.query.order_by(CRMContact.created_at.desc()).limit(10000).all()
+    ]
+    crm_leads = [
+        {
+            "id": l.id, "contact_id": l.contact_id, "campaign_id": l.campaign_id, "channel": l.channel,
+            "interest": l.interest, "category": l.category, "family": l.family, "size": l.size,
+            "product_requested": l.product_requested, "status": l.status, "notes": l.notes,
+            "created_at": iso_dt(l.created_at),
+        } for l in CRMLead.query.order_by(CRMLead.created_at.desc()).limit(10000).all()
+    ]
     settings = {s.key: s.value for s in Setting.query.order_by(Setting.key.asc()).all()}
     audit = [
         {
@@ -1457,6 +1881,9 @@ def backup_snapshot():
             "batches": len(batches),
             "in_entries": len(in_entries),
             "audit": len(audit),
+            "campaigns": len(campaigns),
+            "crm_contacts": len(crm_contacts),
+            "crm_leads": len(crm_leads),
         },
         "data": {
             "users": users,
@@ -1469,6 +1896,9 @@ def backup_snapshot():
             "in_entries": in_entries,
             "settings": settings,
             "audit": audit,
+            "campaigns": campaigns,
+            "crm_contacts": crm_contacts,
+            "crm_leads": crm_leads,
         },
     }
 
@@ -2737,17 +3167,397 @@ def families_export_xlsx():
 
 
 
-@app.route("/integraciones")
+
+# =========================================================
+# Marketing IA / CRM / Agente de ventas
+# =========================================================
+
+def create_social_posts_for_campaign(campaign):
+    channel_map = {
+        "facebook_feed": campaign.facebook_post,
+        "facebook_story": campaign.facebook_story,
+        "instagram_feed": campaign.instagram_post,
+        "instagram_story": campaign.instagram_story,
+        "whatsapp_status": campaign.whatsapp_status,
+        "whatsapp_broadcast": campaign.whatsapp_broadcast,
+        "tiktok_feed": campaign.tiktok_post,
+        "tiktok_story": campaign.tiktok_story,
+    }
+    for channel, content in channel_map.items():
+        post = SocialPost.query.filter_by(campaign_id=campaign.id, channel=channel).first()
+        if not post:
+            post = SocialPost(campaign_id=campaign.id, channel=channel)
+        post.content = content or ""
+        db.session.add(post)
+    db.session.commit()
+
+
+@app.route("/marketing", methods=["GET", "POST"])
 @login_required
+def marketing_view():
+    families = Family.query.filter_by(active=True).order_by(Family.order_index, Family.name).all()
+    if request.method == "POST":
+        action = request.form.get("action", "generate")
+        if action == "generate":
+            title = safe_text(request.form.get("title"), 180) or "Campaña La Americana"
+            campaign = MarketingCampaign(
+                title=title,
+                objective=safe_text(request.form.get("objective"), 120),
+                category=safe_text(request.form.get("category"), 120),
+                family=safe_text(request.form.get("family"), 80),
+                store=safe_text(request.form.get("store"), 120),
+                primary_channel=safe_text(request.form.get("primary_channel"), 80),
+                tone=safe_text(request.form.get("tone"), 120),
+                promotion_text=safe_text(request.form.get("promotion_text"), 255),
+                price_from=safe_text(request.form.get("price_from"), 80),
+                prompt_input=safe_text(request.form.get("prompt_input")),
+                created_by=current_user().username,
+                status="generado",
+            )
+            image = request.files.get("image")
+            if image and image.filename and allowed_image(image.filename):
+                safe_name = secure_filename(image.filename)
+                name = f"{chile_now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(4)}_{safe_name}"
+                image.save(os.path.join(UPLOAD_DIR, name))
+                campaign.image_filename = name
+                campaign.image_url = public_file_url(name)
+            db.session.add(campaign)
+            db.session.flush()
+            payload = generate_marketing_ai_payload(campaign, campaign.image_url, campaign.prompt_input)
+            campaign.facebook_post = payload.get("facebook_post", "")
+            campaign.facebook_story = payload.get("facebook_story", "")
+            campaign.instagram_post = payload.get("instagram_post", "")
+            campaign.instagram_story = payload.get("instagram_story", "")
+            campaign.whatsapp_status = payload.get("whatsapp_status", "")
+            campaign.whatsapp_broadcast = payload.get("whatsapp_broadcast", "")
+            campaign.tiktok_post = payload.get("tiktok_post", "")
+            campaign.tiktok_story = payload.get("tiktok_story", "")
+            campaign.hashtags = payload.get("hashtags", "")
+            campaign.cta = payload.get("cta", "")
+            campaign.segment = payload.get("segment", "")
+            campaign.risk_notes = payload.get("risk_notes", "")
+            campaign.metadata_json = json.dumps(payload, ensure_ascii=False)
+            db.session.commit()
+            create_social_posts_for_campaign(campaign)
+            audit(current_user().username, "generate_marketing_campaign", f"id={campaign.id} {campaign.title}")
+            db.session.commit()
+            flash("Campaña generada y guardada.", "success")
+            return redirect(url_for("marketing_view", campaign_id=campaign.id))
+
+    selected_id = request.args.get("campaign_id", type=int)
+    selected = MarketingCampaign.query.get(selected_id) if selected_id else None
+    campaigns = MarketingCampaign.query.order_by(MarketingCampaign.created_at.desc()).limit(80).all()
+    return render_template("marketing.html", campaigns=campaigns, selected=selected, families=families)
+
+
+@app.route("/marketing/<int:campaign_id>/guardar", methods=["POST"])
+@login_required
+def marketing_save_texts(campaign_id):
+    c = MarketingCampaign.query.get_or_404(campaign_id)
+    for key in ["facebook_post","facebook_story","instagram_post","instagram_story","whatsapp_status","whatsapp_broadcast","tiktok_post","tiktok_story","hashtags","cta","segment","risk_notes"]:
+        setattr(c, key, request.form.get(key, ""))
+    c.status = request.form.get("status", c.status) or c.status
+    db.session.commit()
+    create_social_posts_for_campaign(c)
+    audit(current_user().username, "update_marketing_campaign", f"id={c.id}")
+    db.session.commit()
+    flash("Campaña actualizada.", "success")
+    return redirect(url_for("marketing_view", campaign_id=c.id))
+
+
+@app.route("/marketing/<int:campaign_id>/aprobar", methods=["POST"])
+@login_required
+def marketing_approve(campaign_id):
+    c = MarketingCampaign.query.get_or_404(campaign_id)
+    c.status = "aprobado"
+    c.approved_by = current_user().username
+    c.approved_at = utcnow()
+    audit(current_user().username, "approve_campaign", f"id={c.id}")
+    db.session.commit()
+    flash("Campaña aprobada.", "success")
+    return redirect(url_for("marketing_view", campaign_id=c.id))
+
+
+@app.route("/marketing/<int:campaign_id>/publicar/<channel>", methods=["POST"])
+@login_required
+def marketing_publish_channel(campaign_id, channel):
+    c = MarketingCampaign.query.get_or_404(campaign_id)
+    post = SocialPost.query.filter_by(campaign_id=c.id, channel=channel).first()
+    if not post:
+        post = SocialPost(campaign_id=c.id, channel=channel, content="")
+        db.session.add(post)
+        db.session.commit()
+
+    ok = False
+    detail = ""
+    if channel == "facebook_feed":
+        ok, detail = post_to_facebook_page(c, post)
+    elif channel == "instagram_feed":
+        ok, detail = post_to_instagram(c, post, media_type="IMAGE")
+    elif channel == "instagram_story":
+        ok, detail = post_to_instagram(c, post, media_type="STORIES")
+    elif channel == "whatsapp_broadcast":
+        contacts = CRMContact.query.filter_by(marketing_opt_in=True).filter(CRMContact.phone != "").limit(200).all()
+        sent, errors = 0, []
+        if not contacts:
+            ok, detail = False, "No hay contactos con opt-in marketing y teléfono."
+        else:
+            for contact in contacts:
+                res_ok, res_detail = send_whatsapp_template(contact, c)
+                if res_ok:
+                    sent += 1
+                    db.session.add(CRMInteraction(contact_id=contact.id, campaign_id=c.id, channel="whatsapp", type="difusion", message_out=c.whatsapp_broadcast, created_by=current_user().username))
+                else:
+                    errors.append(f"{contact.phone}: {res_detail[:160]}")
+            ok = sent > 0
+            detail = f"enviados={sent}; errores={len(errors)}" + ("; " + " | ".join(errors[:3]) if errors else "")
+    else:
+        ok = False
+        if channel == "whatsapp_status":
+            detail = "WhatsApp Cloud API oficial no publica estados/historias. Usar publicación manual o proveedor externo bajo tu responsabilidad."
+        elif channel in ("facebook_story", "tiktok_feed", "tiktok_story"):
+            detail = "Canal preparado en UI, pero requiere configuración/API específica y revisión antes de activar publicación automática."
+        else:
+            detail = "Canal no soportado."
+
+    post.status = "publicado" if ok else "error_configuracion"
+    post.last_error = "" if ok else detail
+    post.external_id = detail if ok else ""
+    post.published_at = utcnow() if ok else None
+    audit(current_user().username, "publish_channel", f"campaign={c.id} channel={channel} ok={ok} detail={detail[:250]}")
+    db.session.commit()
+    flash(("Publicado correctamente: " if ok else "No se pudo publicar: ") + detail[:500], "success" if ok else "error")
+    return redirect(url_for("marketing_view", campaign_id=c.id))
+
+
+@app.route("/crm", methods=["GET", "POST"])
+@login_required
+def crm_view():
+    if request.method == "POST":
+        form_type = request.form.get("form_type")
+        if form_type == "contact":
+            contact = CRMContact(
+                full_name=safe_text(request.form.get("full_name"), 160),
+                phone=safe_text(request.form.get("phone"), 40),
+                email=safe_text(request.form.get("email"), 160),
+                instagram_user=safe_text(request.form.get("instagram_user"), 120),
+                facebook_user=safe_text(request.form.get("facebook_user"), 120),
+                city=safe_text(request.form.get("city"), 100),
+                commune=safe_text(request.form.get("commune"), 100),
+                origin_channel=safe_text(request.form.get("origin_channel"), 80),
+                status=safe_text(request.form.get("status"), 60) or "nuevo",
+                marketing_opt_in=bool(request.form.get("marketing_opt_in")),
+                notes=request.form.get("notes", ""),
+                created_by=current_user().username,
+            )
+            db.session.add(contact)
+            db.session.commit()
+            audit(current_user().username, "crm_create_contact", f"id={contact.id} {contact.full_name}")
+            db.session.commit()
+            flash("Contacto CRM creado.", "success")
+        elif form_type == "lead":
+            lead = CRMLead(
+                contact_id=request.form.get("contact_id", type=int) or None,
+                campaign_id=request.form.get("campaign_id", type=int) or None,
+                channel=safe_text(request.form.get("channel"), 80),
+                interest=safe_text(request.form.get("interest"), 255),
+                category=safe_text(request.form.get("category"), 120),
+                family=safe_text(request.form.get("family"), 80),
+                size=safe_text(request.form.get("size"), 80),
+                product_requested=safe_text(request.form.get("product_requested"), 255),
+                store_preference=safe_text(request.form.get("store_preference"), 120),
+                urgency=safe_text(request.form.get("urgency"), 80),
+                status=safe_text(request.form.get("status"), 80) or "nuevo",
+                next_action=safe_text(request.form.get("next_action"), 255),
+                assigned_to=current_user().username,
+                notes=request.form.get("notes", ""),
+            )
+            db.session.add(lead)
+            db.session.commit()
+            audit(current_user().username, "crm_create_lead", f"id={lead.id} {lead.interest}")
+            db.session.commit()
+            flash("Lead creado.", "success")
+        return redirect(url_for("crm_view"))
+
+    q = (request.args.get("q") or "").strip()
+    status = (request.args.get("status") or "").strip()
+    contacts_q = CRMContact.query
+    if q:
+        like = f"%{q}%"
+        contacts_q = contacts_q.filter(or_(CRMContact.full_name.ilike(like), CRMContact.phone.ilike(like), CRMContact.instagram_user.ilike(like), CRMContact.notes.ilike(like)))
+    if status:
+        contacts_q = contacts_q.filter_by(status=status)
+    contacts = contacts_q.order_by(CRMContact.created_at.desc()).limit(200).all()
+    leads = CRMLead.query.order_by(CRMLead.created_at.desc()).limit(200).all()
+    campaigns = MarketingCampaign.query.order_by(MarketingCampaign.created_at.desc()).limit(100).all()
+    return render_template("crm.html", contacts=contacts, leads=leads, campaigns=campaigns)
+
+
+@app.route("/promociones", methods=["GET", "POST"])
+@login_required
+def promotions_view():
+    if request.method == "POST":
+        p = Promotion(
+            name=safe_text(request.form.get("name"), 160),
+            description=request.form.get("description", ""),
+            family=safe_text(request.form.get("family"), 80),
+            category=safe_text(request.form.get("category"), 120),
+            store=safe_text(request.form.get("store"), 120),
+            discount_text=safe_text(request.form.get("discount_text"), 120),
+            active=bool(request.form.get("active")),
+            created_by=current_user().username,
+        )
+        try:
+            if request.form.get("starts_at"):
+                p.starts_at = datetime.strptime(request.form.get("starts_at"), "%Y-%m-%d").date()
+            if request.form.get("ends_at"):
+                p.ends_at = datetime.strptime(request.form.get("ends_at"), "%Y-%m-%d").date()
+        except Exception:
+            pass
+        db.session.add(p)
+        db.session.commit()
+        audit(current_user().username, "create_promotion", p.name)
+        db.session.commit()
+        flash("Promoción creada.", "success")
+        return redirect(url_for("promotions_view"))
+    rows = Promotion.query.order_by(Promotion.created_at.desc()).all()
+    families = Family.query.filter_by(active=True).order_by(Family.order_index, Family.name).all()
+    return render_template("promotions.html", rows=rows, families=families)
+
+
+@app.route("/promociones/<int:promo_id>/toggle", methods=["POST"])
+@login_required
+def promotion_toggle(promo_id):
+    p = Promotion.query.get_or_404(promo_id)
+    p.active = not p.active
+    audit(current_user().username, "toggle_promotion", f"{p.name} active={p.active}")
+    db.session.commit()
+    return redirect(url_for("promotions_view"))
+
+
+@app.route("/conocimiento", methods=["GET", "POST"])
+@login_required
+def knowledge_view():
+    if request.method == "POST":
+        k = KnowledgeBase(
+            title=safe_text(request.form.get("title"), 160),
+            category=safe_text(request.form.get("category"), 80) or "general",
+            content=request.form.get("content", ""),
+            active=bool(request.form.get("active")),
+            created_by=current_user().username,
+        )
+        db.session.add(k)
+        db.session.commit()
+        audit(current_user().username, "create_knowledge", k.title)
+        db.session.commit()
+        flash("Base de conocimiento guardada.", "success")
+        return redirect(url_for("knowledge_view"))
+    rows = KnowledgeBase.query.order_by(KnowledgeBase.updated_at.desc()).all()
+    return render_template("knowledge.html", rows=rows)
+
+
+@app.route("/ventas-agente", methods=["GET", "POST"])
+@login_required
+def sales_agent_view():
+    reply = ""
+    created_lead = None
+    if request.method == "POST":
+        customer_message = request.form.get("customer_message", "")
+        channel = request.form.get("channel", "web")
+        full_name = safe_text(request.form.get("full_name"), 160)
+        phone = safe_text(request.form.get("phone"), 40)
+        interest = safe_text(request.form.get("interest"), 255)
+        size = safe_text(request.form.get("size"), 80)
+        category = safe_text(request.form.get("category"), 120)
+        prompt = f"""
+Responde como agente de ventas de La Americana. No inventes stock exacto, no prometas disponibilidad, no reserves.
+Deriva a WhatsApp o tienda y captura interés.
+Mensaje cliente: {customer_message}
+Interés detectado: {interest}
+Talla: {size}
+Categoría: {category}
+Responde breve, claro y comercial.
+"""
+        key = os.getenv("OPENAI_API_KEY")
+        if key:
+            try:
+                r = requests.post("https://api.openai.com/v1/responses", headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, json={"model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini"), "input": prompt}, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+                reply = data.get("output_text") or ""
+                if not reply:
+                    parts = []
+                    for item in data.get("output", []):
+                        for content in item.get("content", []):
+                            if content.get("type") in ("output_text", "text"):
+                                parts.append(content.get("text", ""))
+                    reply = "\\n".join(parts)
+            except Exception as exc:
+                reply = f"Hola 👋 Gracias por escribir a La Americana. Trabajamos productos americanos seleccionados y la disponibilidad cambia durante el día. ¿Me indicas más detalles de lo que buscas para orientarte? (Error IA: {exc})"
+        else:
+            reply = "Hola 👋 Gracias por escribir a La Americana. Trabajamos productos americanos seleccionados y la disponibilidad cambia durante el día. ¿Me indicas talla/categoría para orientarte mejor? También puedes visitarnos o escribir por WhatsApp."
+
+        if request.form.get("save_lead"):
+            contact = None
+            if phone:
+                contact = CRMContact.query.filter_by(phone=phone).first()
+            if not contact:
+                contact = CRMContact(full_name=full_name or "Cliente sin nombre", phone=phone, origin_channel=channel, status="nuevo", marketing_opt_in=bool(request.form.get("marketing_opt_in")), created_by=current_user().username)
+                db.session.add(contact)
+                db.session.flush()
+            lead = CRMLead(contact_id=contact.id, channel=channel, interest=interest or customer_message[:200], category=category, size=size, status="nuevo", assigned_to=current_user().username, notes=customer_message)
+            db.session.add(lead)
+            db.session.flush()
+            db.session.add(CRMInteraction(contact_id=contact.id, lead_id=lead.id, channel=channel, type="respuesta_agente", message_in=customer_message, message_out=reply, intent=interest, created_by=current_user().username))
+            db.session.commit()
+            created_lead = lead
+            audit(current_user().username, "sales_agent_create_lead", f"lead={lead.id}")
+            db.session.commit()
+            flash("Respuesta generada y lead guardado en CRM.", "success")
+    return render_template("sales_agent.html", reply=reply, created_lead=created_lead)
+
+
+@app.route("/integraciones", methods=["GET", "POST"])
+@login_required
+@role_required("admin")
 def integrations_view():
-    cards = [
-        ("WhatsApp Cloud API", "Pendiente", "Responder clientes y derivar leads por WhatsApp."),
-        ("Instagram / Facebook", "Pendiente", "Responder DM y generar campañas Meta Ads."),
-        ("TikTok", "Pendiente", "Ideas de contenido y futuro tracking de campañas."),
-        ("Jumpseller", "Pendiente", "Leer productos/promociones y mostrar chatbot en la tienda."),
-        ("OpenAI", "Pendiente", "Generador de campañas y asistente interno de marketing."),
+    editable_keys = [
+        ("OpenAI", "OPENAI_API_KEY", "Clave API de OpenAI para generar textos con IA."),
+        ("OpenAI", "OPENAI_MODEL", "Modelo a usar. Ejemplo: gpt-4.1-mini."),
+        ("General", "PUBLIC_BASE_URL", "URL pública del sistema. Ejemplo: https://cloud.lamericana.cl"),
+        ("Meta", "META_GRAPH_VERSION", "Versión Graph API. Ejemplo: v20.0"),
+        ("Meta Facebook", "META_PAGE_ID", "ID de la página de Facebook."),
+        ("Meta Facebook", "META_PAGE_ACCESS_TOKEN", "Page Access Token con permisos de publicación."),
+        ("Instagram", "IG_USER_ID", "ID de Instagram profesional conectado a la página."),
+        ("Instagram", "IG_ACCESS_TOKEN", "Token para Instagram Graph API, puede ser Page token según configuración."),
+        ("WhatsApp", "WHATSAPP_PHONE_NUMBER_ID", "ID del número de WhatsApp Cloud API."),
+        ("WhatsApp", "WHATSAPP_ACCESS_TOKEN", "Token de WhatsApp Cloud API."),
+        ("WhatsApp", "WHATSAPP_TEMPLATE_MARKETING", "Nombre de plantilla aprobada para difusión marketing."),
+        ("WhatsApp", "WHATSAPP_TEMPLATE_LANG", "Idioma plantilla. Ejemplo: es_CL."),
+        ("TikTok", "TIKTOK_CLIENT_KEY", "Client Key TikTok."),
+        ("TikTok", "TIKTOK_CLIENT_SECRET", "Client Secret TikTok."),
+        ("TikTok", "TIKTOK_ACCESS_TOKEN", "Token OAuth TikTok del usuario/cuenta."),
     ]
-    return render_template("integrations.html", cards=cards)
+    if request.method == "POST":
+        for _, key, _ in editable_keys:
+            val = request.form.get(key, "").strip()
+            if val:
+                rec = Setting.query.get(key.lower()) or Setting(key=key.lower())
+                rec.value = val
+                db.session.add(rec)
+        audit(current_user().username, "save_integrations", "credenciales marketing/crm")
+        db.session.commit()
+        flash("Integraciones guardadas. Las claves también pueden ir como variables de entorno en Render.", "success")
+        return redirect(url_for("integrations_view"))
+    settings = {s.key: s.value for s in Setting.query.all()}
+    cards = [
+        ("OpenAI", "Listo" if (os.getenv("OPENAI_API_KEY") or settings.get("openai_api_key")) else "Pendiente", "Generador IA de campañas y agente de ventas."),
+        ("Facebook Page", "Listo" if (os.getenv("META_PAGE_ID") and os.getenv("META_PAGE_ACCESS_TOKEN")) or (settings.get("meta_page_id") and settings.get("meta_page_access_token")) else "Pendiente", "Publicación en muro de página Facebook."),
+        ("Instagram", "Listo" if (os.getenv("IG_USER_ID") and (os.getenv("IG_ACCESS_TOKEN") or os.getenv("META_PAGE_ACCESS_TOKEN"))) or (settings.get("ig_user_id") and (settings.get("ig_access_token") or settings.get("meta_page_access_token"))) else "Pendiente", "Publicación feed/story con cuenta profesional conectada."),
+        ("WhatsApp Cloud API", "Listo" if (os.getenv("WHATSAPP_PHONE_NUMBER_ID") and os.getenv("WHATSAPP_ACCESS_TOKEN")) or (settings.get("whatsapp_phone_number_id") and settings.get("whatsapp_access_token")) else "Pendiente", "Difusión por plantilla aprobada y atención a clientes."),
+        ("TikTok", "Pendiente", "Preparado para OAuth/Content Posting API; requiere auditoría de app para publicación pública."),
+    ]
+    return render_template("integrations.html", cards=cards, editable_keys=editable_keys, settings=settings)
 
 
 @app.route("/auditoria")

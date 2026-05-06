@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Ingreso · La Americana Cloud{% endblock %}
+{% block public %}
+<div class="login-wrap">
+  <form class="login-card" method="post">
+    <div class="brand">La Americana Cloud<small>RUZ Technology company</small></div>
+    {% for category, message in get_flashed_messages(with_categories=true) %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
+    <div class="field"><label>Usuario</label><input class="input" name="username" autocomplete="username" autofocus></div><br>
+    <div class="field"><label>Clave</label><input class="input" name="password" type="password" autocomplete="current-password"></div><br>
+    <button class="btn" style="width:100%">Ingresar</button>
+  </form>
+</div>
+{% endblock %}

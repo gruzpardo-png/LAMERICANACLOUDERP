@@ -1,103 +1,104 @@
 {% extends "base.html" %}
-{% block header %}Usuarios y accesos{% endblock %}
+{% block header %}Dashboard producción{% endblock %}
 {% block content %}
-{% set editing = edit_user is not none %}
-<section class="panel">
-  <h2>{{ 'Editar usuario' if editing else 'Crear usuario' }}</h2>
-  <form method="post" action="{{ url_for('user_edit', user_id=edit_user.id) if editing else url_for('users_view') }}" class="grid">
-    <div class="row3">
-      <div class="field">
-        <label>Usuario</label>
-        <input name="username" value="{{ edit_user.username if editing else '' }}" placeholder="ej: kd" required>
-      </div>
-      <div class="field">
-        <label>Nombre</label>
-        <input name="full_name" value="{{ edit_user.full_name if editing else '' }}" placeholder="Nombre completo">
-      </div>
-      <div class="field">
-        <label>Código etiqueta</label>
-        <input name="code" value="{{ edit_user.code if editing else '' }}" placeholder="KD">
-      </div>
-    </div>
-    <div class="row3">
-      <div class="field">
-        <label>{{ 'Nueva clave' if editing else 'Clave' }}</label>
-        <input name="password" type="password" placeholder="{{ 'Dejar vacío para mantener la clave actual' if editing else 'Clave inicial obligatoria' }}" {% if not editing %}required{% endif %}>
-      </div>
-      <div class="field">
-        <label>Rol</label>
-        <select name="role">
-          {% for role in ['operator', 'supervisor', 'admin', 'auditor'] %}
-            <option value="{{ role }}" {% if editing and edit_user.role == role %}selected{% endif %}>{{ role|capitalize }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="field">
-        <label>Estado</label>
-        <label class="checkline"><input type="checkbox" name="active" {% if (editing and edit_user.active) or not editing %}checked{% endif %}> Activo</label>
-      </div>
-    </div>
+<form class="panel filters" method="get">
+  <div class="field"><label>Desde</label><input type="date" name="start" value="{{ request.args.get('start','') }}"></div>
+  <div class="field"><label>Hasta</label><input type="date" name="end" value="{{ request.args.get('end','') }}"></div>
+  <div class="field"><label>Usuario</label><select name="usuario"><option value="">Todos</option>{% for u in users %}<option value="{{ u.username }}" {% if request.args.get('usuario')==u.username %}selected{% endif %}>{{ u.username }} · {{ u.code }}</option>{% endfor %}</select></div>
+  <div class="field"><label>Terminal</label><select name="terminal"><option value="">Todas</option>{% for t in terminals %}<option value="{{ t.code }}" {% if request.args.get('terminal')==t.code %}selected{% endif %}>{{ t.code }}</option>{% endfor %}</select></div>
+  <div class="field"><label>Familia</label><select name="familia"><option value="">Todas</option>{% for f in families %}<option value="{{ f.name }}" {% if request.args.get('familia')==f.name %}selected{% endif %}>{{ f.display_name }}</option>{% endfor %}</select></div>
+  <div class="field"><label>IN / Producción</label><input name="in" value="{{ request.args.get('in','') }}" placeholder="Ej: TA, BALA, MIX"></div>
+  <button class="btn">Filtrar</button><a class="btn secondary" href="{{ url_for('dashboard') }}">Limpiar</a>
+</form>
 
-    <div class="section-title">Permisos</div>
-    <div class="checkbox-grid">
-      {% for key, default_value in permissions.items() %}
-        {% set is_checked = (edit_user.permissions.get(key, False) if editing else default_value) %}
-        <label class="checkline"><input type="checkbox" name="{{ key }}" {% if is_checked %}checked{% endif %}> {{ key }}</label>
-      {% endfor %}
+<div class="grid cards">
+  <div class="card"><div class="metric-label">Etiquetas reales</div><div class="metric">{{ totals.raw_labels }}</div><div class="muted">Incluye réplicas y etiquetas sueltas.</div></div>
+  <div class="card"><div class="metric-label">Etiquetas cuantificables</div><div class="metric">{{ totals.countable_labels }}</div><div class="muted">Excluye réplicas automáticas.</div></div>
+  <div class="card"><div class="metric-label">Unidades dashboard</div><div class="metric">{{ totals.units }}</div><div class="muted">Zapatillas: 2 etiquetas = 1 unidad.</div></div>
+  <div class="card"><div class="metric-label">Monto producido</div><div class="metric">{{ totals.amount|clp }}</div><div class="muted">Solo producción cuantificable.</div></div>
+  <div class="card"><div class="metric-label">Kilos producidos</div><div class="metric">{{ totals.kg|kg }}</div><div class="muted">Solo producción cuantificable.</div></div>
+  <div class="card"><div class="metric-label">Réplicas detectadas</div><div class="metric">{{ totals.duplicates }}</div><div class="muted">Vestuario, hogar y bolsos &lt;= 5 seg.</div></div>
+  <div class="card"><div class="metric-label">Zapatillas impares</div><div class="metric">{{ totals.shoe_pending }}</div><div class="muted">Etiquetas sin par para conteo.</div></div>
+</div>
+
+<div class="row">
+  <section class="panel">
+    <h2>Resumen por usuario</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Usuario</th><th>Cuantificables</th><th>Réplicas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead>
+        <tbody>{% for r in by_user %}<tr><td>{{ r.key }}</td><td>{{ r.countable_labels }}</td><td>{{ r.duplicates }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody>
+      </table>
     </div>
-    <div class="filters">
-      <button class="btn" style="max-width:220px">{{ 'Guardar cambios' if editing else 'Crear usuario' }}</button>
-      {% if editing %}<a class="btn secondary" href="{{ url_for('users_view') }}">Cancelar edición</a>{% endif %}
+  </section>
+  <section class="panel">
+    <h2>Resumen por terminal</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Terminal</th><th>Cuantificables</th><th>Réplicas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead>
+        <tbody>{% for r in by_terminal %}<tr><td>{{ r.key }}</td><td>{{ r.countable_labels }}</td><td>{{ r.duplicates }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody>
+      </table>
     </div>
-  </form>
-</section>
+  </section>
+</div>
 
 <section class="panel">
-  <h2>Usuarios registrados</h2>
+  <h2>Resumen mensual por usuario</h2>
+  <p class="muted">Unidades reales excluyen réplicas. En zapatillas/calzado, 2 etiquetas cuantificables equivalen a 1 unidad. El total período respeta los filtros activos del dashboard.</p>
   <div class="table-wrap">
-    <table>
+    <table class="dense">
       <thead>
-        <tr>
-          <th>Usuario</th>
-          <th>Código</th>
-          <th>Nombre</th>
-          <th>Rol</th>
-          <th>Activo</th>
-          <th>Permisos activos</th>
-          <th>Acción</th>
-        </tr>
+        <tr><th>Usuarios</th><th>Indicador</th><th>Hoy</th><th>Mes actual</th><th>Mes-1</th><th>Mes-2</th><th>Mes-3</th><th>Total período</th></tr>
       </thead>
       <tbody>
-        {% for u in users %}
-        <tr>
-          <td><strong>{{ u.username }}</strong></td>
-          <td>{{ u.code }}</td>
-          <td>{{ u.full_name }}</td>
-          <td><span class="badge">{{ u.role }}</span></td>
-          <td>{{ 'Sí' if u.active else 'No' }}</td>
-          <td>
-            {% set active_perms = [] %}
-            {% for k, v in u.permissions.items() %}{% if v %}{% set _ = active_perms.append(k) %}{% endif %}{% endfor %}
-            {{ active_perms|join(', ') if active_perms else 'Sin permisos especiales' }}
-          </td>
-          <td>
-            <div class="actions-inline">
-              <a class="btn secondary" href="{{ url_for('user_edit', user_id=u.id) }}">Editar</a>
-              {% if u.active %}
-                <form method="post" action="{{ url_for('user_delete', user_id=u.id) }}">
-                  <button class="btn danger" {% if current_user and current_user.id == u.id %}disabled title="No puedes desactivar tu propio usuario"{% endif %}>Desactivar</button>
-                </form>
-              {% else %}
-                <form method="post" action="{{ url_for('user_activate', user_id=u.id) }}">
-                  <button class="btn">Activar</button>
-                </form>
-              {% endif %}
-            </div>
-          </td>
-        </tr>
+        {% for user_row in user_period_summary %}
+          <tr class="{% if user_row.usuario == 'TODOS LOS USUARIOS' %}total-row{% endif %}">
+            <td rowspan="3"><strong>{{ user_row.usuario }}</strong></td>
+            <td>Monto por usuario</td>
+            <td>{{ user_row.hoy.amount|clp }}</td>
+            <td>{{ user_row.mes_actual.amount|clp }}</td>
+            <td>{{ user_row.mes_1.amount|clp }}</td>
+            <td>{{ user_row.mes_2.amount|clp }}</td>
+            <td>{{ user_row.mes_3.amount|clp }}</td>
+            <td>{{ user_row.total_periodo.amount|clp }}</td>
+          </tr>
+          <tr class="{% if user_row.usuario == 'TODOS LOS USUARIOS' %}total-row{% endif %}">
+            <td>Unidades por usuario (reales sin réplicas)</td>
+            <td>{{ user_row.hoy.units }}</td>
+            <td>{{ user_row.mes_actual.units }}</td>
+            <td>{{ user_row.mes_1.units }}</td>
+            <td>{{ user_row.mes_2.units }}</td>
+            <td>{{ user_row.mes_3.units }}</td>
+            <td>{{ user_row.total_periodo.units }}</td>
+          </tr>
+          <tr class="{% if user_row.usuario == 'TODOS LOS USUARIOS' %}total-row{% endif %}">
+            <td>Kilo por usuario</td>
+            <td>{{ user_row.hoy.kg|kg }}</td>
+            <td>{{ user_row.mes_actual.kg|kg }}</td>
+            <td>{{ user_row.mes_1.kg|kg }}</td>
+            <td>{{ user_row.mes_2.kg|kg }}</td>
+            <td>{{ user_row.mes_3.kg|kg }}</td>
+            <td>{{ user_row.total_periodo.kg|kg }}</td>
+          </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+</section>
+
+<div class="row">
+  <section class="panel">
+    <h2>Resumen por día</h2>
+    <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Reales</th><th>Cuantificables</th><th>Réplicas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_date|reverse %}<tr><td>{{ r.key }}</td><td>{{ r.raw_labels }}</td><td>{{ r.countable_labels }}</td><td>{{ r.duplicates }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div>
+  </section>
+  <section class="panel">
+    <h2>Resumen por IN / descripción producción</h2>
+    <div class="table-wrap"><table><thead><tr><th>IN</th><th>Reales</th><th>Cuantificables</th><th>Réplicas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_in %}<tr><td>{{ r.key }}</td><td>{{ r.raw_labels }}</td><td>{{ r.countable_labels }}</td><td>{{ r.duplicates }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div>
+  </section>
+</div>
+
+<section class="panel">
+  <h2>Resumen por lote</h2>
+  <div class="table-wrap"><table><thead><tr><th>Lote</th><th>Cuantificables</th><th>Réplicas</th><th>Unidades</th><th>Monto</th><th>Kilos</th></tr></thead><tbody>{% for r in by_batch %}<tr><td>{{ r.key }}</td><td>{{ r.countable_labels }}</td><td>{{ r.duplicates }}</td><td>{{ r.units }}</td><td>{{ r.amount|clp }}</td><td>{{ r.kg|kg }}</td></tr>{% endfor %}</tbody></table></div>
 </section>
 {% endblock %}

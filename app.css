@@ -8,13 +8,16 @@ Objetivo:
 - No hay credenciales de PostgreSQL dentro del EXE.
 
 Instalar dependencias Windows:
-    pip install requests pandas openpyxl pyserial python-barcode pillow pywin32 werkzeug
+    pip install requests pandas openpyxl pyserial python-barcode pillow pywin32 werkzeug tzdata
 
 Compilar a EXE después:
     pyinstaller --onefile --windowed lamericana_labeler_local.py
 """
 
 import hashlib
+import logging
+import subprocess
+import sys
 import io
 import json
 import os
@@ -25,10 +28,15 @@ import string
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
+
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 try:
     import requests
@@ -73,8 +81,15 @@ except Exception:
     generate_password_hash = None
 
 
-APP_TITLE = "DOGEFIX CODIFICADOR ROPA"
+APP_TITLE = "lamericana_labeler_local"
 APP_FOOTER = "RUZ Technology company"
+LOCAL_SOFTWARE_VERSION = "1.4.5"
+LOG_DIR = "logs"
+PRODUCTION_SYNC_SECONDS_DEFAULT = 120
+MASTER_SYNC_SECONDS_DEFAULT = 900
+OFFICIAL_TIME_SYNC_SECONDS_DEFAULT = 600
+INACTIVITY_TIMEOUT_SECONDS_DEFAULT = 30 * 60
+OFFICIAL_TIME_VALID_HOURS_DEFAULT = 24
 LOCAL_DB = "lamericana_terminal.sqlite3"
 CONFIG_FILE = "terminal_config.json"
 LEGACY_HISTORY_FILE = "historial_etiquetas.csv"
@@ -84,9 +99,15 @@ DEFAULT_BAUDRATE = 9600
 TERMINAL_OPTIONS = ["T1", "T2", "T3", "T4"]
 SYNC_VALID_HOURS_DEFAULT = 24
 FAMILIAS_DEFAULT = ["vestuario", "hogar", "zapatillas", "bolsos"]
+CHILE_TZ_NAME = "America/Santiago"
 
 # Cambia esto o déjalo vacío para configurarlo desde el login.
 DEFAULT_API_BASE_URL = os.getenv("LAMERICANA_API_URL", "https://cloud.lamericana.cl")
+
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOG_DIR, f"terminal_{datetime.now().strftime('%Y%m%d')}.log")
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, encoding="utf-8", format="%(asctime)s %(levelname)s %(message)s")
+
 
 
 # =========================================================
@@ -116,6 +137,16 @@ def parse_weight(value):
     s = str(value).lower().replace("kg", "").replace(",", ".").strip()
     m = re.search(r"[-+]?\d*\.\d+|\d+", s)
     return float(m.group()) if m else 0.0
+
+
+def idx_numeric(value):
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return round(float(value), 2)
+    s = str(value).replace(",", ".")
+    m = re.search(r"[-+]?\d*\.?\d+", s)
+    return round(float(m.group()), 2) if m else 0.0
 
 
 def format_clp(value):
@@ -153,6 +184,164 @@ def read_json(text, default=None):
         return json.loads(text or "{}")
     except Exception:
         return default if default is not None else {}
+
+
+def normalize_in_value(value):
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def clean_in_value(value):
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+# =========================================================
+# Hora oficial Chile / control contra manipulación de reloj Windows
+# =========================================================
+
+def get_chile_timezone():
+    """Zona horaria Chile. Usa IANA si está disponible; si no, cae a UTC-3."""
+    if ZoneInfo is not None:
+        try:
+            return ZoneInfo(CHILE_TZ_NAME)
+        except Exception:
+            pass
+    return timezone(timedelta(hours=-3), name="Chile")
+
+
+CHILE_TZ = get_chile_timezone()
+
+
+def parse_datetime_value(value, assume="chile"):
+    """Parsea fecha/hora desde API. Si no trae timezone, asume Chile o UTC."""
+    if not value:
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(float(value), timezone.utc).astimezone(CHILE_TZ)
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        try:
+            dt = datetime.strptime(s[:19], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc if assume == "utc" else CHILE_TZ)
+    return dt.astimezone(CHILE_TZ)
+
+
+class OfficialClock:
+    """
+    Mantiene hora oficial de Chile sin depender del reloj Windows.
+    Tras sincronizar, avanza con time.monotonic(), por lo que cambiar la hora del PC
+    no altera la fecha/hora de etiquetas durante la sesión.
+    """
+    def __init__(self, store):
+        self.store = store
+        self.lock = threading.Lock()
+        self.official_epoch_at_sync = None
+        self.monotonic_at_sync = None
+        self.source = ""
+        self.last_error = ""
+
+    def valid_hours(self):
+        try:
+            return float(self.store.get_setting("official_time_valid_hours", str(OFFICIAL_TIME_VALID_HOURS_DEFAULT)) or OFFICIAL_TIME_VALID_HOURS_DEFAULT)
+        except Exception:
+            return OFFICIAL_TIME_VALID_HOURS_DEFAULT
+
+    def is_valid(self):
+        with self.lock:
+            if self.official_epoch_at_sync is None or self.monotonic_at_sync is None:
+                return False
+            age = time.monotonic() - self.monotonic_at_sync
+        return age <= self.valid_hours() * 3600
+
+    def set_from_datetime(self, dt, source):
+        if dt is None:
+            return False
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=CHILE_TZ)
+        dt = dt.astimezone(CHILE_TZ)
+        with self.lock:
+            self.official_epoch_at_sync = dt.timestamp()
+            self.monotonic_at_sync = time.monotonic()
+            self.source = source
+            self.last_error = ""
+        try:
+            self.store.set_setting("last_official_time_source", source)
+            self.store.set_setting("last_official_chile_time", dt.strftime("%Y-%m-%d %H:%M:%S"))
+            self.store.set_setting("last_official_sync_local", now_str())
+        except Exception:
+            pass
+        return True
+
+    def sync_from_payload(self, payload, source="cloud bootstrap"):
+        if not isinstance(payload, dict):
+            return False
+        candidates = []
+        if payload.get("unixtime") is not None:
+            candidates.append((payload.get("unixtime"), "utc", source + " unixtime"))
+        if payload.get("epoch") is not None:
+            candidates.append((payload.get("epoch"), "utc", source + " epoch"))
+        for key in ("utc_datetime", "utc_time"):
+            if payload.get(key):
+                candidates.append((payload.get(key), "utc", source + " " + key))
+        for key in ("chile_time", "chile_datetime", "datetime"):
+            if payload.get(key):
+                candidates.append((payload.get(key), "chile", source + " " + key))
+        if payload.get("server_time"):
+            # Render normalmente entrega UTC si no incluye timezone.
+            candidates.append((payload.get("server_time"), "utc", source + " server_time"))
+        for value, assume, label in candidates:
+            dt = parse_datetime_value(value, assume=assume)
+            if dt and self.set_from_datetime(dt, label):
+                return True
+        return False
+
+    def sync(self, cloud=None):
+        errors = []
+        if cloud is not None:
+            try:
+                data = cloud.get_time()
+                if self.sync_from_payload(data, source="Render API"):
+                    return True
+            except Exception as exc:
+                errors.append(f"Render API: {exc}")
+        if requests is not None:
+            try:
+                r = requests.get("https://worldtimeapi.org/api/timezone/America/Santiago", timeout=8)
+                r.raise_for_status()
+                if self.sync_from_payload(r.json(), source="WorldTimeAPI America/Santiago"):
+                    return True
+            except Exception as exc:
+                errors.append(f"WorldTimeAPI: {exc}")
+        if cloud is not None:
+            try:
+                data = cloud.bootstrap()
+                if self.sync_from_payload(data, source="Render bootstrap"):
+                    return True
+            except Exception as exc:
+                errors.append(f"Bootstrap: {exc}")
+        with self.lock:
+            self.last_error = " | ".join(errors[-3:]) if errors else "sin fuente online"
+        return False
+
+    def now(self):
+        if self.is_valid():
+            with self.lock:
+                epoch = self.official_epoch_at_sync + (time.monotonic() - self.monotonic_at_sync)
+            return datetime.fromtimestamp(epoch, CHILE_TZ)
+        return datetime.now(CHILE_TZ)
+
+    def status_text(self):
+        if self.is_valid():
+            return "Hora oficial CL: " + self.now().strftime("%H:%M:%S")
+        with self.lock:
+            err = self.last_error
+        return "Hora oficial: sin validar" + (f" ({err[:60]})" if err else "")
 
 
 # =========================================================
@@ -222,6 +411,20 @@ class LocalStore:
         )""")
         self.execute("CREATE INDEX IF NOT EXISTS idx_price_family_price ON price_products(family, gross_price)")
         self.execute("""
+        CREATE TABLE IF NOT EXISTS in_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_type TEXT NOT NULL DEFAULT 'IN2',
+            family TEXT NOT NULL DEFAULT '',
+            value TEXT NOT NULL,
+            normalized_value TEXT NOT NULL,
+            display_name TEXT NOT NULL DEFAULT '',
+            active INTEGER NOT NULL DEFAULT 1,
+            usage_count INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        )""")
+        self.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_in_entries_source_family_value ON in_entries(source_type, family, normalized_value)")
+        self.execute("CREATE INDEX IF NOT EXISTS idx_in_entries_lookup ON in_entries(source_type, family, active, value)")
+        self.execute("""
         CREATE TABLE IF NOT EXISTS production (
             local_uuid TEXT PRIMARY KEY,
             timestamp TEXT NOT NULL,
@@ -239,12 +442,41 @@ class LocalStore:
             in_desc TEXT NOT NULL,
             fecha_balanza TEXT NOT NULL,
             hora_balanza TEXT NOT NULL,
+            idx_value REAL NOT NULL DEFAULT 0,
+            countable INTEGER NOT NULL DEFAULT 1,
+            count_status TEXT NOT NULL DEFAULT 'Cuenta',
+            duplicate_reason TEXT NOT NULL DEFAULT '',
+            duplicate_of_uuid TEXT NOT NULL DEFAULT '',
+            batch_code TEXT NOT NULL DEFAULT '',
+            batch_name TEXT NOT NULL DEFAULT '',
+            device_id TEXT NOT NULL DEFAULT '',
+            software_version TEXT NOT NULL DEFAULT '',
             raw_json TEXT NOT NULL DEFAULT '{}',
             synced INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         )""")
         self.execute("CREATE INDEX IF NOT EXISTS idx_prod_synced ON production(synced)")
         self.execute("CREATE INDEX IF NOT EXISTS idx_prod_timestamp ON production(timestamp)")
+        self.ensure_production_columns()
+
+    def ensure_column(self, table, column, ddl):
+        try:
+            cols = [r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            if column not in cols:
+                self.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+        except Exception as exc:
+            logging.exception("No se pudo asegurar columna %s.%s: %s", table, column, exc)
+
+    def ensure_production_columns(self):
+        self.ensure_column("production", "idx_value", "idx_value REAL NOT NULL DEFAULT 0")
+        self.ensure_column("production", "countable", "countable INTEGER NOT NULL DEFAULT 1")
+        self.ensure_column("production", "count_status", "count_status TEXT NOT NULL DEFAULT 'Cuenta'")
+        self.ensure_column("production", "duplicate_reason", "duplicate_reason TEXT NOT NULL DEFAULT ''")
+        self.ensure_column("production", "duplicate_of_uuid", "duplicate_of_uuid TEXT NOT NULL DEFAULT ''")
+        self.ensure_column("production", "batch_code", "batch_code TEXT NOT NULL DEFAULT ''")
+        self.ensure_column("production", "batch_name", "batch_name TEXT NOT NULL DEFAULT ''")
+        self.ensure_column("production", "device_id", "device_id TEXT NOT NULL DEFAULT ''")
+        self.ensure_column("production", "software_version", "software_version TEXT NOT NULL DEFAULT ''")
 
     def get_setting(self, key, default=""):
         row = self.one("SELECT value FROM settings WHERE key=?", (key,))
@@ -276,6 +508,17 @@ class LocalStore:
         self.set_setting("api_base_url", DEFAULT_API_BASE_URL)
         self.set_setting("sync_valid_hours", str(SYNC_VALID_HOURS_DEFAULT))
         self.set_setting("shoe_family_names", "zapatillas,zapatos,calzado")
+        self.set_setting("duplicate_families", "vestuario,hogar,bolsos")
+        self.set_setting("duplicate_detection_seconds", "5")
+        self.set_setting("production_sync_seconds", str(PRODUCTION_SYNC_SECONDS_DEFAULT))
+        self.set_setting("master_sync_seconds", str(MASTER_SYNC_SECONDS_DEFAULT))
+        self.set_setting("logs_visible", "1")
+        self.set_setting("local_software_version", LOCAL_SOFTWARE_VERSION)
+        self.set_setting("inactivity_timeout_seconds", str(INACTIVITY_TIMEOUT_SECONDS_DEFAULT))
+        self.set_setting("official_time_sync_seconds", str(OFFICIAL_TIME_SYNC_SECONDS_DEFAULT))
+        self.set_setting("official_time_valid_hours", str(OFFICIAL_TIME_VALID_HOURS_DEFAULT))
+        self.set_setting("require_official_time_to_print", "1")
+        self.set_setting("in_suggestions_enabled", "1")
 
     def cache_bootstrap(self, payload):
         server_time = payload.get("server_time") or now_str()
@@ -327,7 +570,81 @@ class LocalStore:
                     p.get("updated_at") or server_time,
                 ),
             )
+        # IN2 oficial: catálogo maestro que alimenta el autocompletado local.
+        self.execute("DELETE FROM in_entries WHERE source_type='IN2'")
+        for entry in payload.get("in_suggestions") or []:
+            value = clean_in_value(entry.get("display_name") or entry.get("value"))
+            if not value:
+                continue
+            family = str(entry.get("family") or "").strip().lower()
+            self.upsert_in_entry(
+                source_type="IN2",
+                family=family,
+                value=value,
+                active=bool(entry.get("active", True)),
+                usage_count=int(entry.get("usage_count") or 0),
+            )
         self.set_setting("last_bootstrap", now_str())
+
+
+    def upsert_in_entry(self, source_type, family, value, active=True, usage_count=0):
+        value = clean_in_value(value)
+        if not value:
+            return None
+        family = str(family or "").strip().lower()
+        normalized = normalize_in_value(value)
+        self.execute(
+            """
+            INSERT INTO in_entries(source_type,family,value,normalized_value,display_name,active,usage_count,updated_at)
+            VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(source_type,family,normalized_value) DO UPDATE SET
+                value=excluded.value,
+                display_name=excluded.display_name,
+                active=excluded.active,
+                usage_count=MAX(in_entries.usage_count, excluded.usage_count),
+                updated_at=excluded.updated_at
+            """,
+            (source_type, family, value, normalized, value, 1 if active else 0, int(usage_count or 0), now_str()),
+        )
+        return True
+
+    def register_local_in1(self, family, value):
+        value = clean_in_value(value)
+        if not value or value == "--":
+            return
+        family = str(family or "").strip().lower()
+        normalized = normalize_in_value(value)
+        existing = self.one("SELECT usage_count FROM in_entries WHERE source_type='IN1' AND family=? AND normalized_value=?", (family, normalized))
+        if existing:
+            self.execute("UPDATE in_entries SET usage_count=?, value=?, display_name=?, active=1, updated_at=? WHERE source_type='IN1' AND family=? AND normalized_value=?", (int(existing["usage_count"] or 0)+1, value, value, now_str(), family, normalized))
+        else:
+            self.execute("INSERT INTO in_entries(source_type,family,value,normalized_value,display_name,active,usage_count,updated_at) VALUES(?,?,?,?,?,?,?,?)", ("IN1", family, value, normalized, value, 1, 1, now_str()))
+
+    def get_in_suggestions(self, family=None, limit=500):
+        family = str(family or "").strip().lower()
+        if family:
+            rows = self.query("""
+                SELECT value FROM in_entries
+                WHERE source_type='IN2' AND active=1 AND (family=? OR family='')
+                ORDER BY CASE WHEN family=? THEN 0 ELSE 1 END, usage_count DESC, value ASC
+                LIMIT ?
+            """, (family, family, int(limit)))
+        else:
+            rows = self.query("""
+                SELECT value FROM in_entries
+                WHERE source_type='IN2' AND active=1
+                ORDER BY usage_count DESC, value ASC
+                LIMIT ?
+            """, (int(limit),))
+        out = []
+        seen = set()
+        for r in rows:
+            v = clean_in_value(r["value"])
+            key = normalize_in_value(v)
+            if v and key not in seen:
+                seen.add(key)
+                out.append(v)
+        return out
 
     def get_user(self, username):
         row = self.one("SELECT * FROM users WHERE username=?", (username.lower(),))
@@ -451,14 +768,81 @@ class LocalStore:
         except Exception as exc:
             print(f"No se pudo migrar CSV antiguo: {exc}")
 
+    def duplicate_family_set(self):
+        raw = self.get_setting("duplicate_families", "vestuario,hogar,bolsos")
+        return {x.strip().lower() for x in raw.split(",") if x.strip()}
+
+    def shoe_family_set(self):
+        raw = self.get_setting("shoe_family_names", "zapatillas,zapatos,calzado")
+        return {x.strip().lower() for x in raw.split(",") if x.strip()}
+
+    def duplicate_window_seconds(self):
+        try:
+            return int(self.get_setting("duplicate_detection_seconds", "5") or "5")
+        except Exception:
+            return 5
+
+    def detect_duplicate(self, payload):
+        fam = str(payload.get("familia") or "").strip().lower()
+        if fam not in self.duplicate_family_set() or fam in self.shoe_family_set():
+            return True, "Cuenta", "", ""
+        try:
+            ts = datetime.strptime((payload.get("timestamp") or now_str())[:19], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            ts = datetime.now()
+        window = self.duplicate_window_seconds()
+        start_ts = (ts - timedelta(seconds=window)).strftime("%Y-%m-%d %H:%M:%S")
+        end_ts = (ts + timedelta(seconds=window)).strftime("%Y-%m-%d %H:%M:%S")
+        idx_val = round(float(payload.get("idx_value") or idx_numeric(payload.get("idx"))), 2)
+        peso = round(float(payload.get("peso_kg") or parse_weight(payload.get("peso"))), 3)
+        rows = self.query(
+            """
+            SELECT local_uuid, timestamp FROM production
+            WHERE timestamp BETWEEN ? AND ?
+              AND lower(familia)=?
+              AND lower(usuario)=?
+              AND upper(terminal)=?
+              AND precio_int=?
+              AND round(peso_kg,3)=?
+              AND codigo_producto=?
+              AND lower(in_desc)=?
+              AND upper(modo_impresion)=?
+              AND round(idx_value,2)=?
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            (
+                start_ts, end_ts, fam,
+                str(payload.get("usuario") or "").strip().lower(),
+                str(payload.get("terminal") or "").strip().upper(),
+                int(payload.get("precio_int") or clp_to_int(payload.get("precio"))),
+                peso,
+                str(payload.get("codigo_producto") or ""),
+                str(payload.get("in_desc") or payload.get("in") or "").strip().lower(),
+                str(payload.get("modo_impresion") or "").strip().upper(),
+                idx_val,
+            ),
+        )
+        if rows:
+            return False, "Réplica", f"réplica automática menor a {window} segundos", rows[0]["local_uuid"]
+        return True, "Cuenta", "", ""
+
     def save_production(self, item, synced=0):
         payload = dict(item)
         local_uuid = payload.get("local_uuid") or str(uuid.uuid4())
         payload["local_uuid"] = local_uuid
+        payload["peso_kg"] = round(float(payload.get("peso_kg") or parse_weight(payload.get("peso"))), 3)
+        payload["precio_int"] = int(payload.get("precio_int") or clp_to_int(payload.get("precio")))
+        payload["idx_value"] = round(float(payload.get("idx_value") or idx_numeric(payload.get("idx"))), 2)
+        countable, count_status, duplicate_reason, duplicate_of_uuid = self.detect_duplicate(payload)
+        payload["countable"] = bool(countable)
+        payload["count_status"] = count_status
+        payload["duplicate_reason"] = duplicate_reason
+        payload["duplicate_of_uuid"] = duplicate_of_uuid
         self.execute(
             """
-            INSERT OR IGNORE INTO production(local_uuid,timestamp,usuario,codigo_usuario,terminal,familia,modo,modo_impresion,precio_int,peso_kg,codigo_producto,descripcion,idx,in_desc,fecha_balanza,hora_balanza,raw_json,synced,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            INSERT OR IGNORE INTO production(local_uuid,timestamp,usuario,codigo_usuario,terminal,familia,modo,modo_impresion,precio_int,peso_kg,codigo_producto,descripcion,idx,idx_value,in_desc,fecha_balanza,hora_balanza,countable,count_status,duplicate_reason,duplicate_of_uuid,batch_code,batch_name,device_id,software_version,raw_json,synced,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 local_uuid,
@@ -469,19 +853,32 @@ class LocalStore:
                 payload.get("familia") or "",
                 payload.get("modo") or "",
                 payload.get("modo_impresion") or "",
-                int(payload.get("precio_int") or clp_to_int(payload.get("precio"))),
-                float(payload.get("peso_kg") or parse_weight(payload.get("peso"))),
+                payload["precio_int"],
+                payload["peso_kg"],
                 payload.get("codigo_producto") or "",
                 payload.get("descripcion") or "",
                 payload.get("idx") or "",
+                payload["idx_value"],
                 payload.get("in_desc") or payload.get("in") or "",
                 payload.get("fecha_balanza") or "",
                 payload.get("hora_balanza") or "",
+                1 if countable else 0,
+                count_status,
+                duplicate_reason,
+                duplicate_of_uuid,
+                payload.get("batch_code") or "",
+                payload.get("batch_name") or "",
+                payload.get("device_id") or "",
+                payload.get("software_version") or "",
                 safe_json(payload),
                 int(synced),
                 now_str(),
             ),
         )
+        try:
+            self.register_local_in1(payload.get("familia"), payload.get("in_desc") or payload.get("in"))
+        except Exception:
+            logging.exception("No se pudo registrar IN1 local")
         return local_uuid
 
     def pending_production(self, limit=200):
@@ -505,6 +902,15 @@ class LocalStore:
                 "in_desc": r["in_desc"],
                 "fecha_balanza": r["fecha_balanza"],
                 "hora_balanza": r["hora_balanza"],
+                "idx_value": r["idx_value"],
+                "countable": bool(r["countable"]),
+                "count_status": r["count_status"],
+                "duplicate_reason": r["duplicate_reason"],
+                "duplicate_of_uuid": r["duplicate_of_uuid"],
+                "batch_code": r["batch_code"],
+                "batch_name": r["batch_name"],
+                "device_id": r["device_id"],
+                "software_version": r["software_version"],
             })
         return out
 
@@ -533,7 +939,7 @@ class CloudClient:
             raise RuntimeError("API no configurada o requests no instalado")
         r = requests.post(
             f"{self.base_url}/api/v1/auth/login",
-            json={"username": username, "password": password, "terminal": terminal, "device_id": device_id},
+            json={"username": username, "password": password, "terminal": terminal, "device_id": device_id, "software_version": LOCAL_SOFTWARE_VERSION},
             timeout=12,
         )
         r.raise_for_status()
@@ -541,6 +947,16 @@ class CloudClient:
         if not data.get("ok"):
             raise RuntimeError(data.get("error") or "login rechazado")
         self.token = data["token"]
+        return data
+
+    def get_time(self):
+        if not self.available():
+            raise RuntimeError("API no configurada o requests no instalado")
+        r = requests.get(f"{self.base_url}/api/v1/time", headers=self.headers(), timeout=8)
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict) and data.get("ok") is False:
+            raise RuntimeError(data.get("error") or "hora rechazada")
         return data
 
     def bootstrap(self):
@@ -704,16 +1120,20 @@ class BalanzaApp:
         self.root = root
         self.root.title(APP_TITLE)
         self.root.geometry("1366x768")
-        self.root.minsize(1180, 680)
+        self.root.minsize(1100, 650)
 
         self.store = LocalStore()
         self.cloud = CloudClient(self.store.get_setting("api_base_url", DEFAULT_API_BASE_URL))
         self.device_id = self.store.get_setting("device_id", "") or str(uuid.uuid4())
         self.store.set_setting("device_id", self.device_id)
+        self.official_clock = OfficialClock(self.store)
+        self.last_activity_monotonic = time.monotonic()
+        self.closing_due_to_inactivity = False
 
         self.current_user = None
         self.current_terminal = None
         self.productos_por_familia = self.store.prices_df_by_family()
+        self.in_suggestion_values = []
         self.idx_value = 0.0
 
         self.data_queue = queue.Queue()
@@ -729,34 +1149,186 @@ class BalanzaApp:
         self._build_vars()
         self.setup_theme()
         self.crear_interfaz()
+        self.actualizar_sugerencias_in()
         self.root.after(100, self.actualizar_etiquetas)
         self.root.after(2000, self.sync_pending_async)
+        self.root.after(3000, self.schedule_production_sync)
+        self.root.after(5000, self.schedule_master_sync)
+        self.root.after(2500, self.sync_official_time_async)
+        self.root.after(8000, self.schedule_official_time_sync)
+        self.root.after(60000, self.check_inactivity)
+        self.bind_activity_tracking()
+        logging.info("Inicio software local version %s", LOCAL_SOFTWARE_VERSION)
         self.solicitar_login_inicial()
+
+    def ui_set(self, var, value):
+        try:
+            self.root.after(0, lambda: var.set(value))
+        except Exception:
+            pass
+
+    def log_event(self, message):
+        logging.info(message)
+
+    def open_logs_folder(self):
+        try:
+            os.makedirs(LOG_DIR, exist_ok=True)
+            if sys.platform.startswith("win"):
+                os.startfile(os.path.abspath(LOG_DIR))
+            else:
+                subprocess.Popen(["xdg-open", os.path.abspath(LOG_DIR)])
+        except Exception as exc:
+            messagebox.showerror("Logs", f"No se pudo abrir carpeta de logs:\n{exc}")
+
+    # -------------------------
+    # Hora oficial Chile e inactividad
+    # -------------------------
+    def bind_activity_tracking(self):
+        for sequence in ("<Key>", "<Button>", "<Motion>", "<MouseWheel>", "<Button-4>", "<Button-5>"):
+            try:
+                self.root.bind_all(sequence, self.on_user_activity, add="+")
+            except Exception:
+                pass
+
+    def inactivity_timeout_seconds(self):
+        try:
+            return int(self.store.get_setting("inactivity_timeout_seconds", str(INACTIVITY_TIMEOUT_SECONDS_DEFAULT)) or INACTIVITY_TIMEOUT_SECONDS_DEFAULT)
+        except Exception:
+            return INACTIVITY_TIMEOUT_SECONDS_DEFAULT
+
+    def on_user_activity(self, event=None):
+        if self.closing_due_to_inactivity:
+            return
+        idle_seconds = time.monotonic() - getattr(self, "last_activity_monotonic", time.monotonic())
+        if self.current_user and idle_seconds >= self.inactivity_timeout_seconds():
+            self.close_due_to_inactivity(idle_seconds)
+            return
+        self.last_activity_monotonic = time.monotonic()
+
+    def check_inactivity(self):
+        if self.closing_due_to_inactivity:
+            return
+        try:
+            if self.current_user:
+                idle_seconds = time.monotonic() - self.last_activity_monotonic
+                if idle_seconds >= self.inactivity_timeout_seconds():
+                    self.close_due_to_inactivity(idle_seconds)
+                    return
+        finally:
+            try:
+                self.root.after(60000, self.check_inactivity)
+            except Exception:
+                pass
+
+    def close_due_to_inactivity(self, idle_seconds=0):
+        if self.closing_due_to_inactivity:
+            return
+        self.closing_due_to_inactivity = True
+        logging.info("Cierre automático por inactividad: %.1f minutos", idle_seconds / 60.0)
+        try:
+            self.var_status.set("Cierre automático por inactividad. Sincronizando pendientes...")
+            self.sync_pending()
+        except Exception:
+            logging.exception("No se pudo sincronizar antes del cierre por inactividad")
+        try:
+            self.desconectar_balanza()
+        except Exception:
+            pass
+        try:
+            self.root.after(500, self.root.destroy)
+        except Exception:
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
+
+    def sync_official_time_async(self):
+        threading.Thread(target=self.sync_official_time, daemon=True).start()
+
+    def sync_official_time(self):
+        try:
+            if not self.cloud.token:
+                token = self.store.get_setting("api_token", "")
+                if token:
+                    self.cloud.token = token
+            ok = self.official_clock.sync(self.cloud)
+            self.ui_set(self.var_clock_status, self.official_clock.status_text())
+            if ok:
+                logging.info("Hora oficial sincronizada: %s", self.official_clock.status_text())
+            else:
+                logging.warning("No se pudo sincronizar hora oficial: %s", self.official_clock.status_text())
+            return ok
+        except Exception as exc:
+            logging.exception("Error sincronizando hora oficial: %s", exc)
+            self.ui_set(self.var_clock_status, "Hora oficial: error")
+            return False
+
+    def schedule_official_time_sync(self):
+        try:
+            self.sync_official_time_async()
+            seconds = int(self.store.get_setting("official_time_sync_seconds", str(OFFICIAL_TIME_SYNC_SECONDS_DEFAULT)) or OFFICIAL_TIME_SYNC_SECONDS_DEFAULT)
+        except Exception:
+            seconds = OFFICIAL_TIME_SYNC_SECONDS_DEFAULT
+        self.root.after(max(120, seconds) * 1000, self.schedule_official_time_sync)
+
+    def require_official_time_to_print(self):
+        return str(self.store.get_setting("require_official_time_to_print", "1")).strip() not in {"0", "false", "False", "no", "NO"}
+
+    def ensure_official_time_ready(self):
+        if self.official_clock.is_valid():
+            return True
+        self.var_status.set("Sincronizando hora oficial de Chile...")
+        ok = self.sync_official_time()
+        if ok and self.official_clock.is_valid():
+            return True
+        if self.require_official_time_to_print():
+            messagebox.showerror(
+                "Hora oficial requerida",
+                "No se pudo validar la hora oficial de Chile.\n\n"
+                "Para evitar datos alterados por la hora del Windows, el sistema no imprimirá "
+                "hasta sincronizar la hora oficial. Revisa internet y presiona 'Sincronizar'."
+            )
+            return False
+        return True
+
+    def official_now(self):
+        return self.official_clock.now()
+
+    def set_current_label_time(self):
+        dt = self.official_now()
+        self.var_fecha.set(dt.strftime("%Y-%m-%d"))
+        self.var_hora.set(dt.strftime("%H:%M:%S"))
+        try:
+            self.lbl_fecha.config(text=f"Fecha: {self.var_fecha.get()}")
+            self.lbl_hora.config(text=f"Hora: {self.var_hora.get()}")
+        except Exception:
+            pass
+        self.ui_set(self.var_clock_status, self.official_clock.status_text())
+        return dt
 
     # -------------------------
     # Theme
     # -------------------------
     def setup_theme(self):
         """
-        Tema clásico del software original, manteniendo la infraestructura nueva:
-        API cloud, SQLite local, usuarios/precios sincronizados y producción pendiente.
+        Tema clásico compacto: neutro, claro y parecido al software original,
+        pero conservando la infraestructura nueva de nube, logs, lotes y SQLite.
         """
         self.COLORS = {
             "bg": "#F0F8FF",
             "panel": "#F0F8FF",
             "panel2": "#FFFFFF",
-            "text": "#333333",
+            "text": "#263238",
             "muted": "#455A64",
             "accent": "#0D47A1",
             "accent2": "#6A1B9A",
-            "ok": "green",
-            "danger": "red",
-            "warning": "orange",
-            "preview_border": "#CCCCCC",
+            "ok": "#1B5E20",
+            "danger": "#B71C1C",
+            "warning": "#E65100",
+            "preview_border": "#B0BEC5",
         }
         self.root.configure(bg=self.COLORS["bg"])
         style = ttk.Style()
-        # En Windows mantiene un look más parecido al anterior. En otros sistemas cae a clam/default.
         try:
             if "vista" in style.theme_names():
                 style.theme_use("vista")
@@ -767,25 +1339,27 @@ class BalanzaApp:
         except Exception:
             pass
 
+        # Tipografía compacta para que el sistema completo quepa mejor en 1366x768.
+        base_font = ("Arial", 9)
+        small_font = ("Arial", 8)
+        bold_font = ("Arial", 9, "bold")
+        title_font = ("Arial", 14, "bold")
+
         style.configure("TFrame", background=self.COLORS["bg"])
         style.configure("Card.TFrame", background=self.COLORS["bg"], relief="flat")
-        style.configure("TLabel", background=self.COLORS["bg"], foreground=self.COLORS["text"], font=("Arial", 10))
-        style.configure("Muted.TLabel", background=self.COLORS["bg"], foreground=self.COLORS["muted"], font=("Arial", 9))
-        style.configure("Title.TLabel", background=self.COLORS["bg"], foreground=self.COLORS["text"], font=("Arial", 18, "bold"))
-        style.configure("Brand.TLabel", background=self.COLORS["bg"], foreground=self.COLORS["muted"], font=("Arial", 9, "bold"))
+        style.configure("TLabel", background=self.COLORS["bg"], foreground=self.COLORS["text"], font=base_font)
+        style.configure("Muted.TLabel", background=self.COLORS["bg"], foreground=self.COLORS["muted"], font=small_font)
+        style.configure("Title.TLabel", background=self.COLORS["bg"], foreground=self.COLORS["text"], font=title_font)
+        style.configure("Brand.TLabel", background=self.COLORS["bg"], foreground=self.COLORS["muted"], font=("Arial", 8, "bold"))
         style.configure("TLabelframe", background=self.COLORS["bg"], foreground=self.COLORS["text"])
-        style.configure("TLabelframe.Label", background=self.COLORS["bg"], foreground=self.COLORS["text"], font=("Arial", 10, "bold"))
-        style.configure("TButton", font=("Arial", 9, "bold"), padding=4)
-        style.configure("Secondary.TButton", font=("Arial", 9, "bold"), padding=4)
-        style.configure("TEntry", fieldbackground="white", foreground="black")
-        style.configure("TCombobox", fieldbackground="white", foreground="black")
-        style.configure("TRadiobutton", background=self.COLORS["bg"], foreground=self.COLORS["text"], font=("Arial", 10))
+        style.configure("TLabelframe.Label", background=self.COLORS["bg"], foreground=self.COLORS["accent"], font=bold_font)
+        style.configure("TButton", font=("Arial", 8, "bold"), padding=(4, 2))
+        style.configure("Secondary.TButton", font=("Arial", 8, "bold"), padding=(4, 2))
+        style.configure("TEntry", fieldbackground="white", foreground="black", font=base_font)
+        style.configure("TCombobox", fieldbackground="white", foreground="black", font=base_font)
+        style.configure("TRadiobutton", background=self.COLORS["bg"], foreground=self.COLORS["text"], font=bold_font)
         style.configure("TNotebook", background=self.COLORS["bg"])
-        style.configure("TNotebook.Tab", padding=(10, 5), font=("Arial", 9, "bold"))
-
-    # -------------------------
-    # Variables y login
-    # -------------------------
+        style.configure("TNotebook.Tab", padding=(8, 3), font=("Arial", 8, "bold"))
     def _build_vars(self):
         self.var_valor_kilo = tk.StringVar()
         self.var_in_kilo = tk.StringVar()
@@ -793,6 +1367,7 @@ class BalanzaApp:
         self.var_in_objetivo = tk.StringVar()
         self.var_status = tk.StringVar(value="Listo")
         self.var_sync = tk.StringVar(value="Nube: sin validar")
+        self.var_clock_status = tk.StringVar(value="Hora oficial: sin validar")
         self.var_com_port = tk.StringVar(value=self.load_config().get("com_port", DEFAULT_COM_PORT))
         self.var_baudrate = tk.StringVar(value=str(self.load_config().get("baudrate", DEFAULT_BAUDRATE)))
         self.var_familia = tk.StringVar(value="")
@@ -805,6 +1380,8 @@ class BalanzaApp:
         self.var_hora = tk.StringVar(value="--")
         self.var_in_out = tk.StringVar(value="--")
         self.var_modo = tk.StringVar(value="--")
+        self.var_batch_code = tk.StringVar(value=self.store.get_setting("batch_code", ""))
+        self.var_batch_name = tk.StringVar(value=self.store.get_setting("batch_name", ""))
         self.modo_impresion = "--"
 
     def load_config(self):
@@ -831,15 +1408,19 @@ class BalanzaApp:
                 data = self.cloud.login(username, password, terminal, self.device_id)
                 self.current_user = data["user"]
                 self.current_terminal = terminal
-                self.var_sync.set("Nube: conectada")
+                self.var_sync.set(f"Nube: conectada · v{LOCAL_SOFTWARE_VERSION}")
                 self.store.set_setting("api_token", self.cloud.token)
                 self.store.set_setting("last_login_online", now_str())
+                logging.info("Login online OK usuario=%s terminal=%s", username, terminal)
                 try:
                     boot = self.cloud.bootstrap()
                     self.store.cache_bootstrap(boot)
+                    self.official_clock.sync_from_payload(boot, source="Render bootstrap login")
+                    self.ui_set(self.var_clock_status, self.official_clock.status_text())
                     self.productos_por_familia = self.store.prices_df_by_family()
                 except Exception as exc:
                     self.var_sync.set(f"Nube: login OK, sync pendiente ({exc})")
+                self.sync_official_time_async()
                 return True, "Ingreso online correcto"
             except Exception as exc:
                 online_error = str(exc)
@@ -849,7 +1430,9 @@ class BalanzaApp:
             self.current_user = {k: user.get(k) for k in ["username", "code", "full_name", "role", "active", "permissions"]}
             self.current_terminal = terminal
             self.var_sync.set("Nube: offline / usando caché local")
+            logging.info("Login offline OK usuario=%s terminal=%s", username, terminal)
             return True, "Ingreso offline correcto"
+        logging.warning("Login rechazado usuario=%s terminal=%s error=%s", username, terminal, online_error or "sin conexión")
         return False, "No se pudo ingresar. Error online: " + (online_error or "sin conexión")
 
     def solicitar_login_inicial(self):
@@ -893,6 +1476,9 @@ class BalanzaApp:
     def crear_interfaz(self):
         self.outer = tk.Frame(self.root, bg=self.COLORS["bg"])
         self.outer.pack(fill="both", expand=True)
+
+        # Conservamos scroll para pantallas pequeñas, pero el layout queda compacto
+        # para que normalmente se vea completo en 1366x768.
         self.main_canvas = tk.Canvas(self.outer, bg=self.COLORS["bg"], highlightthickness=0)
         self.v_scrollbar = ttk.Scrollbar(self.outer, orient="vertical", command=self.main_canvas.yview)
         self.main_canvas.configure(yscrollcommand=self.v_scrollbar.set)
@@ -904,49 +1490,61 @@ class BalanzaApp:
         self.main_canvas.bind("<Configure>", lambda e: self.main_canvas.itemconfigure(self.canvas_window, width=e.width))
         self.root.bind_all("<MouseWheel>", lambda e: self.main_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"), add="+")
 
-        header = tk.Frame(self.frame_principal, bg=self.COLORS["bg"], padx=10, pady=8)
+        header = tk.Frame(self.frame_principal, bg=self.COLORS["bg"], padx=8, pady=4)
         header.pack(fill="x")
         left = tk.Frame(header, bg=self.COLORS["bg"])
         left.pack(side="left")
         ttk.Label(left, text=APP_TITLE, style="Title.TLabel").pack(anchor="w")
-        ttk.Label(left, text=APP_FOOTER, style="Brand.TLabel").pack(anchor="w", pady=(2, 0))
-        self.lbl_usuario_actual = tk.Label(header, text="Usuario: --", bg=self.COLORS["panel"], fg=self.COLORS["text"], font=("Arial", 12, "bold"), padx=18, pady=10)
-        self.lbl_usuario_actual.pack(side="right", padx=8)
+        ttk.Label(left, text=f"{APP_FOOTER} · Local v{LOCAL_SOFTWARE_VERSION}", style="Brand.TLabel").pack(anchor="w", pady=(0, 0))
+        self.lbl_usuario_actual = tk.Label(
+            header, text="Usuario: --", bg=self.COLORS["panel"], fg=self.COLORS["text"],
+            font=("Arial", 9, "bold"), padx=10, pady=4
+        )
+        self.lbl_usuario_actual.pack(side="right", padx=6)
 
-        actions = ttk.LabelFrame(self.frame_principal, text="CONTROL TERMINAL / NUBE", padding=12)
-        actions.pack(fill="x", padx=10, pady=(0, 8))
-        ttk.Label(actions, text="Puerto COM:").pack(side="left", padx=(2, 4))
-        self.cmb_com = ttk.Combobox(actions, textvariable=self.var_com_port, values=self.get_available_com_ports(), width=10)
-        self.cmb_com.pack(side="left", padx=3)
-        ttk.Label(actions, text="Baud:").pack(side="left", padx=(10, 4))
-        ttk.Entry(actions, textvariable=self.var_baudrate, width=8).pack(side="left", padx=3)
-        self.btn_conectar = ttk.Button(actions, text="Conectar balanza", command=self.conectar_desconectar_balanza)
-        self.btn_conectar.pack(side="left", padx=5)
-        ttk.Button(actions, text="Actualizar COM", style="Secondary.TButton", command=self.refrescar_puertos_com).pack(side="left", padx=5)
-        ttk.Button(actions, text="Sincronizar nube", style="Secondary.TButton", command=self.manual_sync).pack(side="left", padx=5)
-        ttk.Label(actions, textvariable=self.var_sync, foreground=self.COLORS["ok"]).pack(side="right", padx=8)
+        actions = ttk.LabelFrame(self.frame_principal, text="CONTROL TERMINAL / NUBE", padding=(6, 4))
+        actions.pack(fill="x", padx=8, pady=(0, 4))
+        ttk.Label(actions, text="COM:").pack(side="left", padx=(2, 2))
+        self.cmb_com = ttk.Combobox(actions, textvariable=self.var_com_port, values=self.get_available_com_ports(), width=8)
+        self.cmb_com.pack(side="left", padx=2)
+        ttk.Label(actions, text="Baud:").pack(side="left", padx=(8, 2))
+        ttk.Entry(actions, textvariable=self.var_baudrate, width=7).pack(side="left", padx=2)
+        self.btn_conectar = ttk.Button(actions, text="Conectar", command=self.conectar_desconectar_balanza)
+        self.btn_conectar.pack(side="left", padx=3)
+        ttk.Button(actions, text="Actualizar COM", style="Secondary.TButton", command=self.refrescar_puertos_com).pack(side="left", padx=3)
+        ttk.Button(actions, text="Sincronizar", style="Secondary.TButton", command=self.manual_sync).pack(side="left", padx=3)
+        ttk.Button(actions, text="Logs", style="Secondary.TButton", command=self.open_logs_folder).pack(side="left", padx=3)
+        ttk.Label(actions, textvariable=self.var_sync, foreground=self.COLORS["ok"]).pack(side="right", padx=6)
+        ttk.Label(actions, textvariable=self.var_clock_status, foreground=self.COLORS["accent"]).pack(side="right", padx=6)
 
-        datos = ttk.LabelFrame(self.frame_principal, text="DATOS BALANZA", padding=12)
-        datos.pack(fill="x", padx=10, pady=6)
-        self.lbl_peso_datos = tk.Label(datos, text="Peso: -- kg", bg=self.COLORS["panel"], fg=self.COLORS["accent"], font=("Arial", 11, "bold"), padx=14, pady=6)
-        self.lbl_peso_datos.grid(row=0, column=0, padx=8, sticky="w")
-        self.lbl_fecha = tk.Label(datos, text="Fecha: --", bg=self.COLORS["panel"], fg=self.COLORS["ok"], font=("Arial", 12, "bold"), padx=12)
-        self.lbl_fecha.grid(row=0, column=1, padx=8, sticky="w")
-        self.lbl_hora = tk.Label(datos, text="Hora: --", bg=self.COLORS["panel"], fg="#b9a7ff", font=("Arial", 12, "bold"), padx=12)
-        self.lbl_hora.grid(row=0, column=2, padx=8, sticky="w")
+        datos = ttk.LabelFrame(self.frame_principal, text="DATOS BALANZA", padding=(6, 5))
+        datos.pack(fill="x", padx=8, pady=(0, 4))
+        self.lbl_peso_datos = tk.Label(datos, text="Peso: -- kg", bg=self.COLORS["panel"], fg="blue", font=("Arial", 12, "bold"), padx=8, pady=2)
+        self.lbl_peso_datos.grid(row=0, column=0, padx=6, sticky="w")
+        self.lbl_fecha = tk.Label(datos, text="Fecha: --", bg=self.COLORS["panel"], fg="green", font=("Arial", 9, "bold"), padx=6, pady=2)
+        self.lbl_fecha.grid(row=0, column=1, padx=6, sticky="w")
+        self.lbl_hora = tk.Label(datos, text="Hora: --", bg=self.COLORS["panel"], fg="purple", font=("Arial", 9, "bold"), padx=6, pady=2)
+        self.lbl_hora.grid(row=0, column=2, padx=6, sticky="w")
 
-        familia_frame = ttk.LabelFrame(self.frame_principal, text="FAMILIA / HOJA DE PRECIOS", padding=12)
-        familia_frame.pack(fill="x", padx=10, pady=(0, 6))
-        ttk.Label(familia_frame, text="Seleccione la familia antes de calcular o imprimir. Mantiene el estilo por puntos del sistema actual.").grid(row=0, column=0, columnspan=6, sticky="w", pady=(0, 8))
+        familia_frame = ttk.LabelFrame(self.frame_principal, text="FAMILIA / HOJA DE PRECIOS", padding=(6, 5))
+        familia_frame.pack(fill="x", padx=8, pady=(0, 4))
+        ttk.Label(familia_frame, text="Seleccione familia antes de calcular o imprimir.").grid(row=0, column=0, columnspan=6, sticky="w", pady=(0, 2))
         families = self.store.get_families() or [{"name": f, "display_name": f.title()} for f in FAMILIAS_DEFAULT]
         for idx, fam in enumerate(families):
-            ttk.Radiobutton(familia_frame, text=fam["display_name"], value=fam["name"], variable=self.var_familia, command=self.on_family_change).grid(row=1, column=idx, sticky="w", padx=10)
+            ttk.Radiobutton(familia_frame, text=fam["display_name"], value=fam["name"], variable=self.var_familia, command=self.on_family_change).grid(row=1, column=idx, sticky="w", padx=8)
+
+        lote_frame = ttk.LabelFrame(self.frame_principal, text="LOTE DE PRODUCCIÓN (opcional)", padding=(6, 5))
+        lote_frame.pack(fill="x", padx=8, pady=(0, 4))
+        ttk.Label(lote_frame, text="Código lote:").grid(row=0, column=0, sticky="w", padx=4, pady=1)
+        ttk.Entry(lote_frame, textvariable=self.var_batch_code, width=20).grid(row=0, column=1, sticky="w", padx=4, pady=1)
+        ttk.Label(lote_frame, text="Nombre lote:").grid(row=0, column=2, sticky="w", padx=4, pady=1)
+        ttk.Entry(lote_frame, textvariable=self.var_batch_name, width=38).grid(row=0, column=3, sticky="w", padx=4, pady=1)
 
         middle = tk.Frame(self.frame_principal, bg=self.COLORS["bg"])
-        middle.pack(fill="x", padx=10, pady=6)
+        middle.pack(fill="x", padx=8, pady=(0, 4))
         middle.columnconfigure(0, weight=1)
         inputs = ttk.Frame(middle)
-        inputs.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        inputs.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         self.notebook = ttk.Notebook(inputs)
         self.notebook.pack(fill="x")
         self.frame_por_kilo = ttk.Frame(self.notebook)
@@ -956,67 +1554,131 @@ class BalanzaApp:
         self.crear_tab_por_kilo()
         self.crear_tab_precio_objetivo()
 
-        buttons = ttk.LabelFrame(middle, text="ACCIONES", padding=12)
+        buttons = ttk.LabelFrame(middle, text="ACCIONES", padding=(8, 5))
         buttons.grid(row=0, column=1, sticky="ne")
-        self.btn_calcular = ttk.Button(buttons, text="Calcular", command=self.calcular_desde_tab_activa, width=20)
-        self.btn_calcular.pack(fill="x", pady=5)
-        self.btn_imprimir = ttk.Button(buttons, text="Imprimir XRT 60x40", command=self.calcular_e_imprimir_60x40, width=20)
-        self.btn_imprimir.pack(fill="x", pady=5)
-        ttk.Button(buttons, text="Limpiar", style="Secondary.TButton", command=self.limpiar_salida, width=20).pack(fill="x", pady=5)
+        self.btn_calcular = ttk.Button(buttons, text="Calcular", command=self.calcular_desde_tab_activa, width=17)
+        self.btn_calcular.pack(fill="x", pady=3)
+        self.btn_imprimir = ttk.Button(buttons, text="Imprimir XRT 60x40", command=self.calcular_e_imprimir_60x40, width=17)
+        self.btn_imprimir.pack(fill="x", pady=3)
+        ttk.Button(buttons, text="Limpiar", style="Secondary.TButton", command=self.limpiar_salida, width=17).pack(fill="x", pady=3)
 
-        output = ttk.LabelFrame(self.frame_principal, text="OUTPUT / PREVIEW", padding=12)
-        output.pack(fill="both", expand=True, padx=10, pady=6)
+        output = ttk.LabelFrame(self.frame_principal, text="OUTPUT / PREVIEW", padding=(6, 5))
+        output.pack(fill="both", expand=True, padx=8, pady=(0, 4))
         output.columnconfigure(0, weight=1)
         left_out = tk.Frame(output, bg=self.COLORS["panel"])
-        left_out.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        left_out.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         right_out = tk.Frame(output, bg=self.COLORS["panel"])
         right_out.grid(row=0, column=1, sticky="ne")
         self.add_output_row(left_out, 0, "Modo", self.var_modo, self.COLORS["accent2"])
         self.add_output_row(left_out, 1, "Precio", self.var_precio, self.COLORS["danger"], big=True)
         self.add_output_row(left_out, 2, "Peso", self.var_peso, "blue")
         self.add_output_row(left_out, 3, "Código", self.var_codigo, self.COLORS["warning"])
-        self.add_output_row(left_out, 4, "Descripción", self.var_descripcion, self.COLORS["text"], wrap=520)
+        self.add_output_row(left_out, 4, "Descripción", self.var_descripcion, self.COLORS["text"], wrap=500)
         self.add_output_row(left_out, 5, "IDX", self.var_idx, self.COLORS["text"])
-        self.add_output_row(left_out, 6, "IN", self.var_in_out, self.COLORS["text"], wrap=520)
-        tk.Label(right_out, text="Vista previa etiqueta 60x40", bg=self.COLORS["panel"], fg=self.COLORS["text"], font=("Arial", 10, "bold")).pack(anchor="w", pady=(0, 4))
-        self.canvas_preview = tk.Canvas(right_out, width=430, height=260, bg="#f8fafc", highlightthickness=1, highlightbackground=self.COLORS["preview_border"])
+        self.add_output_row(left_out, 6, "IN", self.var_in_out, self.COLORS["text"], wrap=500)
+        tk.Label(right_out, text="Vista previa etiqueta 60x40", bg=self.COLORS["panel"], fg=self.COLORS["text"], font=("Arial", 8, "bold")).pack(anchor="w", pady=(0, 2))
+        self.canvas_preview = tk.Canvas(right_out, width=360, height=210, bg="#F6F6F6", highlightthickness=1, highlightbackground=self.COLORS["preview_border"])
         self.canvas_preview.pack()
 
-        status = tk.Label(self.frame_principal, textvariable=self.var_status, bg=self.COLORS["bg"], fg=self.COLORS["accent"], font=("Arial", 10, "bold"), anchor="w")
-        status.pack(fill="x", padx=10, pady=(2, 10))
-
+        status = tk.Label(self.frame_principal, textvariable=self.var_status, bg=self.COLORS["bg"], fg=self.COLORS["accent"], font=("Arial", 8, "bold"), anchor="w")
+        status.pack(fill="x", padx=8, pady=(0, 4))
     def add_output_row(self, parent, row, label, var, fg, big=False, wrap=None):
-        tk.Label(parent, text=label + ":", bg=self.COLORS["panel"], fg=self.COLORS["muted"], font=("Arial", 10, "bold"), width=14, anchor="w").grid(row=row, column=0, sticky="w", pady=4, padx=8)
-        tk.Label(parent, textvariable=var, bg=self.COLORS["panel"], fg=fg, font=("Arial", 11 if big else 10, "bold"), wraplength=wrap or 0, anchor="w").grid(row=row, column=1, sticky="w", pady=4, padx=8)
-
+        tk.Label(parent, text=label + ":", bg=self.COLORS["panel"], fg=self.COLORS["muted"], font=("Arial", 8, "bold"), width=12, anchor="w").grid(row=row, column=0, sticky="w", pady=1, padx=4)
+        tk.Label(parent, textvariable=var, bg=self.COLORS["panel"], fg=fg, font=("Arial", 10 if big else 8, "bold"), wraplength=wrap or 0, anchor="w").grid(row=row, column=1, sticky="w", pady=1, padx=4)
     def crear_tab_por_kilo(self):
-        frame = ttk.LabelFrame(self.frame_por_kilo, text="Cálculo por valor kilo", padding=12)
-        frame.pack(fill="x", padx=8, pady=8)
-        ttk.Label(frame, text="Valor kilo:").grid(row=0, column=0, sticky="w", padx=5, pady=5)
-        ttk.Entry(frame, textvariable=self.var_valor_kilo, width=22).grid(row=0, column=1, sticky="w", padx=5, pady=5)
-        ttk.Label(frame, text="IN / producción:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
-        ttk.Entry(frame, textvariable=self.var_in_kilo, width=42).grid(row=1, column=1, sticky="w", padx=5, pady=5)
-        ttk.Label(frame, text="Usa peso de balanza y busca el precio más cercano en la familia.").grid(row=2, column=0, columnspan=2, sticky="w", padx=5, pady=5)
-
+        frame = ttk.LabelFrame(self.frame_por_kilo, text="Cálculo por valor kilo", padding=(6, 5))
+        frame.pack(fill="x", padx=4, pady=4)
+        ttk.Label(frame, text="Valor kilo:").grid(row=0, column=0, sticky="w", padx=4, pady=2)
+        ttk.Entry(frame, textvariable=self.var_valor_kilo, width=18).grid(row=0, column=1, sticky="w", padx=4, pady=2)
+        ttk.Label(frame, text="IN / producción:").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+        self.cmb_in_kilo = ttk.Combobox(frame, textvariable=self.var_in_kilo, width=38)
+        self.cmb_in_kilo.grid(row=1, column=1, sticky="w", padx=4, pady=2)
+        self.cmb_in_kilo.bind("<KeyRelease>", lambda e: self.filtrar_sugerencias_in(self.cmb_in_kilo))
+        self.cmb_in_kilo.bind("<FocusIn>", lambda e: self.actualizar_sugerencias_in())
+        ttk.Label(frame, text="Usa peso de balanza y busca el precio más cercano en la familia.").grid(row=2, column=0, columnspan=2, sticky="w", padx=4, pady=2)
     def crear_tab_precio_objetivo(self):
-        frame = ttk.LabelFrame(self.frame_precio_objetivo, text="Cálculo por precio directo", padding=12)
-        frame.pack(fill="x", padx=8, pady=8)
-        ttk.Label(frame, text="Precio deseado:").grid(row=0, column=0, sticky="w", padx=5, pady=5)
-        ttk.Entry(frame, textvariable=self.var_precio_objetivo, width=22).grid(row=0, column=1, sticky="w", padx=5, pady=5)
-        ttk.Label(frame, text="IN / producción:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
-        ttk.Entry(frame, textvariable=self.var_in_objetivo, width=42).grid(row=1, column=1, sticky="w", padx=5, pady=5)
-        ttk.Label(frame, text="Busca el precio más similar hacia arriba y calcula IDX según peso.").grid(row=2, column=0, columnspan=2, sticky="w", padx=5, pady=5)
+        frame = ttk.LabelFrame(self.frame_precio_objetivo, text="Cálculo por precio directo", padding=(6, 5))
+        frame.pack(fill="x", padx=4, pady=4)
+        ttk.Label(frame, text="Precio deseado:").grid(row=0, column=0, sticky="w", padx=4, pady=2)
+        ttk.Entry(frame, textvariable=self.var_precio_objetivo, width=18).grid(row=0, column=1, sticky="w", padx=4, pady=2)
+        ttk.Label(frame, text="IN / producción:").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+        self.cmb_in_objetivo = ttk.Combobox(frame, textvariable=self.var_in_objetivo, width=38)
+        self.cmb_in_objetivo.grid(row=1, column=1, sticky="w", padx=4, pady=2)
+        self.cmb_in_objetivo.bind("<KeyRelease>", lambda e: self.filtrar_sugerencias_in(self.cmb_in_objetivo))
+        self.cmb_in_objetivo.bind("<FocusIn>", lambda e: self.actualizar_sugerencias_in())
+        ttk.Label(frame, text="Busca el precio más similar hacia arriba y calcula IDX según peso.").grid(row=2, column=0, columnspan=2, sticky="w", padx=4, pady=2)
 
-    # -------------------------
-    # Sync
-    # -------------------------
+    def actualizar_sugerencias_in(self):
+        try:
+            familia = self.var_familia.get().strip().lower()
+            values = self.store.get_in_suggestions(familia, limit=500)
+            self.in_suggestion_values = values
+            if hasattr(self, "cmb_in_kilo"):
+                self.cmb_in_kilo["values"] = values
+            if hasattr(self, "cmb_in_objetivo"):
+                self.cmb_in_objetivo["values"] = values
+        except Exception:
+            logging.exception("No se pudieron actualizar sugerencias IN")
+
+    def filtrar_sugerencias_in(self, combo):
+        try:
+            typed = normalize_in_value(combo.get())
+            base = self.in_suggestion_values or self.store.get_in_suggestions(self.var_familia.get().strip().lower(), limit=500)
+            if typed:
+                filtered = [v for v in base if typed in normalize_in_value(v)][:80]
+            else:
+                filtered = base[:80]
+            combo["values"] = filtered
+            # No forzamos despliegue automático agresivo para evitar molestar al digitador.
+        except Exception:
+            pass
+
     def manual_sync(self):
-        self.productos_por_familia = self.store.prices_df_by_family()
+        self.sync_master_async()
         self.sync_pending_async()
-        self.var_status.set("Sincronización solicitada")
+        self.var_status.set("Sincronización completa solicitada")
 
     def sync_pending_async(self):
         threading.Thread(target=self.sync_pending, daemon=True).start()
+
+    def sync_master_async(self):
+        threading.Thread(target=self.sync_master, daemon=True).start()
+
+    def schedule_production_sync(self):
+        try:
+            self.sync_pending_async()
+            seconds = int(self.store.get_setting("production_sync_seconds", str(PRODUCTION_SYNC_SECONDS_DEFAULT)) or PRODUCTION_SYNC_SECONDS_DEFAULT)
+        except Exception:
+            seconds = PRODUCTION_SYNC_SECONDS_DEFAULT
+        self.root.after(max(30, seconds) * 1000, self.schedule_production_sync)
+
+    def schedule_master_sync(self):
+        try:
+            self.sync_master_async()
+            seconds = int(self.store.get_setting("master_sync_seconds", str(MASTER_SYNC_SECONDS_DEFAULT)) or MASTER_SYNC_SECONDS_DEFAULT)
+        except Exception:
+            seconds = MASTER_SYNC_SECONDS_DEFAULT
+        self.root.after(max(300, seconds) * 1000, self.schedule_master_sync)
+
+    def sync_master(self):
+        try:
+            if not self.cloud.token:
+                token = self.store.get_setting("api_token", "")
+                if token:
+                    self.cloud.token = token
+            if not self.cloud.available() or not self.cloud.token:
+                return
+            boot = self.cloud.bootstrap()
+            self.store.cache_bootstrap(boot)
+            self.official_clock.sync_from_payload(boot, source="Render bootstrap maestros")
+            self.ui_set(self.var_clock_status, self.official_clock.status_text())
+            self.productos_por_familia = self.store.prices_df_by_family()
+            self.root.after(0, self.actualizar_sugerencias_in)
+            self.ui_set(self.var_sync, "Nube: maestros actualizados")
+            logging.info("Bootstrap actualizado desde nube")
+        except Exception as exc:
+            self.ui_set(self.var_sync, "Nube: maestros pendientes")
+            logging.exception("Error sincronizando maestros: %s", exc)
 
     def sync_pending(self):
         try:
@@ -1028,15 +1690,15 @@ class BalanzaApp:
                 return
             items = self.store.pending_production(200)
             if not items:
-                self.var_sync.set("Nube: al día")
+                self.ui_set(self.var_sync, "Nube: al día")
                 return
             resp = self.cloud.sync_production(items)
-            # Si el servidor omitió algunos por duplicados, igual marcamos todos los enviados como sincronizados.
             self.store.mark_synced([x["local_uuid"] for x in items])
-            self.var_sync.set(f"Nube: sync OK ({resp.get('inserted',0)} nuevos)")
+            self.ui_set(self.var_sync, f"Nube: sync OK ({resp.get('inserted',0)} nuevos)")
+            logging.info("Producción sincronizada: %s", resp)
         except Exception as exc:
-            self.var_sync.set("Nube: pendiente")
-            print(f"Sync pendiente: {exc}")
+            self.ui_set(self.var_sync, "Nube: pendiente")
+            logging.exception("Sync pendiente: %s", exc)
 
     # -------------------------
     # Balanza / COM
@@ -1111,11 +1773,16 @@ class BalanzaApp:
                 ultimo = self.data_queue.get_nowait()
             if ultimo is not None:
                 peso, fecha, hora = ultimo
+                if self.official_clock.is_valid():
+                    dt = self.official_now()
+                    fecha = dt.strftime("%Y-%m-%d")
+                    hora = dt.strftime("%H:%M:%S")
                 self.lbl_peso_datos.config(text=f"Peso: {peso:.3f} kg")
                 self.lbl_fecha.config(text=f"Fecha: {fecha}")
                 self.lbl_hora.config(text=f"Hora: {hora}")
                 self.var_fecha.set(fecha)
                 self.var_hora.set(hora)
+                self.ui_set(self.var_clock_status, self.official_clock.status_text())
                 self.var_status.set(f"Peso leído correctamente: {peso:.3f} kg")
         except queue.Empty:
             pass
@@ -1131,6 +1798,7 @@ class BalanzaApp:
         fam = self.var_familia.get().strip()
         if fam:
             self.var_status.set(f"Familia seleccionada: {fam}")
+        self.actualizar_sugerencias_in()
 
     def validar_familia_seleccionada(self, para_imprimir=False):
         fam = self.var_familia.get().strip().lower()
@@ -1318,14 +1986,28 @@ class BalanzaApp:
         return ellipsis
 
     def generar_imagen_output_60x40(self):
+        """
+        Etiqueta 60x40 con disposición visual antigua.
+
+        Ajuste v1.4.4:
+        - Se mantiene el mismo layout/cantidad de filas del diseño anterior.
+        - El método KL/PR ya no usa una fila exclusiva abajo.
+        - El método se imprime en la misma línea de DS, alineado a la derecha.
+        - La fila inferior, donde antes iba KL/PR, ahora muestra el lote:
+              LT: codigo_lote | nombre_lote
+          Siempre en una sola línea y truncado con "..." si no cabe.
+        """
         if Image is None:
             return None
         try:
             w_px, h_px = self._label_px()
             image = Image.new("RGB", (w_px, h_px), "white")
             draw = ImageDraw.Draw(image)
+
+            # Layout antiguo: mismas alturas y separación base.
             margin_x, margin_y = 8, 6
             top_price_h, barcode_h, footer_h = 84, 86, 118
+
             precio_str = self.var_precio.get().replace("$", "").strip()
             peso_str = self.var_peso.get().strip()
             codigo_producto = self.var_codigo.get().strip()
@@ -1333,15 +2015,34 @@ class BalanzaApp:
             fecha, hora = self.var_fecha.get().strip(), self.var_hora.get().strip()
             in_value = self.var_in_out.get().strip()
             modo = (self.modo_impresion or "--").strip()
+            batch_code = self.var_batch_code.get().strip()
+            batch_name = self.var_batch_name.get().strip()
+
             if precio_str in ("--", "") or peso_str.startswith("--") or codigo_producto in ("--", ""):
                 raise ValueError("Información insuficiente")
-            price_font = self._best_fit_font(draw, f"${precio_str}", ["arialbd.ttf", "arial.ttf"], w_px - 2 * margin_x, top_price_h - 4)
+
+            price_font = self._best_fit_font(
+                draw,
+                f"${precio_str}",
+                ["arialbd.ttf", "arial.ttf"],
+                w_px - 2 * margin_x,
+                top_price_h - 4,
+                start=78,
+                end=18,
+            )
             info_font = self._try_font(["arialbd.ttf", "arial.ttf"], 16)
             small_font = self._try_font(["arial.ttf", "arialbd.ttf"], 13)
             tiny_font = self._try_font(["arial.ttf", "arialbd.ttf"], 11)
+
             price_text = f"${precio_str}"
             bb = draw.textbbox((0, 0), price_text, font=price_font)
-            draw.text(((w_px - (bb[2] - bb[0])) // 2, margin_y + (top_price_h - (bb[3] - bb[1])) // 2), price_text, fill="black", font=price_font)
+            draw.text(
+                ((w_px - (bb[2] - bb[0])) // 2, margin_y + (top_price_h - (bb[3] - bb[1])) // 2),
+                price_text,
+                fill="black",
+                font=price_font,
+            )
+
             barcode_y0 = margin_y + top_price_h + 2
             if self.barcode_pil_image:
                 b = self.barcode_pil_image.convert("1")
@@ -1350,20 +2051,48 @@ class BalanzaApp:
                 nw, nh = max(1, int(bw * scale)), max(1, int(bh * scale))
                 bc = b.resize((nw, nh), Image.NEAREST)
                 image.paste(bc.convert("RGB"), ((w_px - nw) // 2, barcode_y0 + (barcode_h - nh) // 2))
+
             footer_y = h_px - footer_h
             right_x = w_px // 2
+            max_w = w_px - 2 * margin_x
+
             draw.text((margin_x, footer_y), f"Cod: {codigo_producto}", fill="black", font=info_font)
             draw.text((margin_x, footer_y + 20), f"Peso: {peso_str}", fill="black", font=info_font)
             draw.text((right_x, footer_y + 20), f"Fecha: {fecha}", fill="black", font=info_font)
+
             idx_line = f"IDX: {self.idx_value:.2f}"
             if self.current_user and self.current_terminal:
                 idx_line += f"  {self.current_user.get('code','--')} {self.current_terminal}"
             draw.text((margin_x, footer_y + 40), idx_line, fill="black", font=small_font)
             draw.text((right_x, footer_y + 40), f"Hora: {hora}", fill="black", font=small_font)
-            max_w = w_px - 2 * margin_x
-            draw.text((margin_x, footer_y + 60), self.truncate_text(draw, f"IN: {in_value if in_value else '--'}", small_font, max_w), fill="black", font=small_font)
-            draw.text((margin_x, footer_y + 76), self.truncate_text(draw, f"DS: {descripcion if descripcion else '--'}", small_font, max_w), fill="black", font=small_font)
-            draw.text((margin_x, h_px - 14), modo, fill="black", font=tiny_font)
+
+            draw.text(
+                (margin_x, footer_y + 60),
+                self.truncate_text(draw, f"IN: {in_value if in_value else '--'}", small_font, max_w),
+                fill="black",
+                font=small_font,
+            )
+
+            # DS + método en una misma fila para conservar cantidad de filas del layout antiguo.
+            modo_text = modo if modo else "--"
+            modo_bb = draw.textbbox((0, 0), modo_text, font=small_font)
+            modo_w = modo_bb[2] - modo_bb[0]
+            gap = 12
+            ds_available_w = max_w - modo_w - gap
+            ds_text = self.truncate_text(draw, f"DS: {descripcion if descripcion else '--'}", small_font, ds_available_w)
+            ds_y = footer_y + 76
+            draw.text((margin_x, ds_y), ds_text, fill="black", font=small_font)
+            draw.text((w_px - margin_x - modo_w, ds_y), modo_text, fill="black", font=small_font)
+
+            # Fila inferior: se reutiliza el espacio donde antes iba solo KL/PR.
+            # El lote siempre queda en una única línea.
+            lote_text = f"LT: {batch_code or '--'} | {batch_name or '--'}"
+            draw.text(
+                (margin_x, h_px - 14),
+                self.truncate_text(draw, lote_text, tiny_font, max_w),
+                fill="black",
+                font=tiny_font,
+            )
             return image
         except Exception as e:
             print(f"Error al generar imagen etiqueta: {e}")
@@ -1376,21 +2105,17 @@ class BalanzaApp:
         self.last_label_image = img
         self.canvas_preview.delete("all")
         if img is None:
-            self.canvas_preview.create_text(215, 130, text="Sin vista previa", fill="black", font=("Arial", 12))
+            self.canvas_preview.create_text(180, 105, text="Sin vista previa", fill="black", font=("Arial", 10))
             return
         preview = img.copy()
-        target_w, target_h = 410, 240
+        target_w, target_h = 340, 195
         scale = min(target_w / preview.width, target_h / preview.height)
         nw, nh = max(1, int(preview.width * scale)), max(1, int(preview.height * scale))
         preview = preview.resize((nw, nh), Image.NEAREST)
         bg = Image.new("RGB", (target_w, target_h), "white")
         bg.paste(preview, ((target_w - nw) // 2, (target_h - nh) // 2))
         self.preview_label_tk = ImageTk.PhotoImage(bg)
-        self.canvas_preview.create_image(10, 10, anchor="nw", image=self.preview_label_tk)
-
-    # -------------------------
-    # Impresión
-    # -------------------------
+        self.canvas_preview.create_image(10, 8, anchor="nw", image=self.preview_label_tk)
     def get_xprinter_printer(self):
         if win32print is None:
             return None
@@ -1405,9 +2130,14 @@ class BalanzaApp:
         if not self.has_permission("print_labels"):
             messagebox.showerror("Sin permiso", "Este usuario no puede imprimir etiquetas.")
             return
+        if not self.ensure_official_time_ready():
+            return
+        self.set_current_label_time()
         if not self.validar_familia_seleccionada(True):
             return
         if self.calcular_desde_tab_activa():
+            self.set_current_label_time()
+            self.actualizar_preview_etiqueta()
             self.imprimir_xrt_60x40()
 
     def imprimir_xrt_60x40(self):
@@ -1456,9 +2186,10 @@ class BalanzaApp:
     def append_print_history(self):
         price_int = clp_to_int(self.var_precio.get())
         peso_kg = parse_weight(self.var_peso.get())
+        dt = self.set_current_label_time() if self.official_clock.is_valid() else datetime.now(CHILE_TZ)
         row = {
             "local_uuid": str(uuid.uuid4()),
-            "timestamp": now_str(),
+            "timestamp": dt.strftime("%Y-%m-%d %H:%M:%S"),
             "usuario": self.current_user.get("username", "") if self.current_user else "",
             "codigo_usuario": self.current_user.get("code", "") if self.current_user else "",
             "terminal": self.current_terminal or "",
@@ -1473,8 +2204,16 @@ class BalanzaApp:
             "in_desc": self.var_in_out.get(),
             "fecha_balanza": self.var_fecha.get(),
             "hora_balanza": self.var_hora.get(),
+            "idx_value": self.idx_value,
+            "batch_code": self.var_batch_code.get().strip(),
+            "batch_name": self.var_batch_name.get().strip(),
+            "device_id": self.device_id,
+            "software_version": LOCAL_SOFTWARE_VERSION,
         }
+        self.store.set_setting("batch_code", self.var_batch_code.get().strip())
+        self.store.set_setting("batch_name", self.var_batch_name.get().strip())
         self.store.save_production(row, synced=0)
+        logging.info("Etiqueta guardada localmente: %s", row)
         self.sync_pending_async()
 
 

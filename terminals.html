@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block header %}Integraciones{% endblock %}
+{% block content %}
+<div class="grid cards">
+{% for title,status,desc in cards %}
+  <div class="card"><div class="metric-label">{{ status }}</div><div style="font-size:20px;font-weight:900;margin:8px 0">{{ title }}</div><p class="muted">{{ desc }}</p></div>
+{% endfor %}
+</div>
+<section class="panel">
+  <h2>Credenciales / configuración</h2>
+  <p class="muted">Puedes guardar aquí valores no críticos. Para producción es mejor poner tokens sensibles como variables de entorno en Render.</p>
+  <form method="post">
+    <div class="table-wrap"><table><thead><tr><th>Grupo</th><th>Clave</th><th>Valor</th><th>Descripción</th></tr></thead><tbody>
+    {% for group,key,desc in editable_keys %}
+      <tr><td>{{ group }}</td><td><code>{{ key }}</code></td><td><input name="{{ key }}" value="{{ settings.get(key.lower(), '') }}" placeholder="configurar en Render"></td><td>{{ desc }}</td></tr>
+    {% endfor %}
+    </tbody></table></div>
+    <button class="btn" style="margin-top:12px">Guardar integraciones</button>
+  </form>
+</section>
+<section class="panel warning-box">
+  <h2>Orden recomendado</h2>
+  <p>Primero configura OpenAI para generación. Luego Meta/Instagram para publicar. WhatsApp requiere plantillas aprobadas para difusión. TikTok requiere OAuth y revisión/auditoría para publicación pública.</p>
+</section>
+{% endblock %}
